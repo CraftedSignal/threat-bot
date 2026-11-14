@@ -3,7 +3,7 @@ module github.com/craftedsignal/threat-bot
 go 1.27.4
 
 require (
-	github.com/craftedsignal/sigma-parser v0.4.1
+	github.com/craftedsignal/sigma-parser v0.4.2-0.20261114094447-542844e5e5b1
 	github.com/google/uuid v1.6.0
 	github.com/mmcdole/gofeed v1.5.0
 	golang.org/x/net v0.62.0

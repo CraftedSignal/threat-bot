@@ -1,0 +1,32 @@
+# Optional GitHub.com publisher example. Copy and adapt into private runtime config.
+# Set GITHUB_TOKEN outside this file, or configure all GitHub App fields below.
+# This is a deliberately public example compatibility value, not a secret.
+# Use the same reviewed feed_public_key value as your feed consumers.
+db:
+  path: ./data/threat-bot.db
+llm:
+  provider: ollama
+  endpoint: http://localhost:11434
+  model: qwen3:8b
+pipeline:
+  auto_publish: false
+  quality_threshold: 3.5
+  initial_lookback: 24h
+sources:
+  cisa_kev:
+    enabled: true
+    poll_interval: 1h
+publish:
+  repo_slug: example-owner/feed-repository
+  site_url: https://feed.example.org
+  branch: main
+  author_name: threat-bot
+  author_email: threat-bot@users.noreply.github.com
+  feed_public_key: "0000000000000000000000000000000000000000000000000000000000000000"
+monitoring:
+  public_feed_url: ""
+# Alternative to GITHUB_TOKEN; mount the private key at runtime.
+# github:
+#   app_id: 12345
+#   installation_id: 67890
+#   private_key_path: /run/secrets/github-app.pem

@@ -1,0 +1,3 @@
+# Repository access and protected-branch rules enforce review; this file assigns ownership.
+# See GOVERNANCE.md for the sole-maintainer review and emergency exception policy.
+* @hazcod

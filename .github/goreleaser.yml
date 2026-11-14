@@ -1,0 +1,40 @@
+version: 2
+project_name: threat-bot
+dist: dist/goreleaser
+
+builds:
+  - id: threat-bot
+    main: ./cmd/threat-bot
+    binary: threat-bot
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos: [linux]
+    goarch: [amd64]
+    flags: [-trimpath]
+    tags: [timetzdata]
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }} -X main.revision={{ .FullCommit }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - config.example.yaml
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_v{{ .Version }}_source"
+  prefix_template: "{{ .ProjectName }}-v{{ .Version }}/"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: CraftedSignal
+    name: threat-bot

@@ -1,0 +1,17 @@
+name: Feature proposal
+description: Describe a workflow or capability you want to improve.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: Explain who needs this and what is difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: Include compatibility, cost, data handling, and operational considerations where relevant.
+    validations:
+      required: true

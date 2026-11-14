@@ -1,0 +1,31 @@
+Publication-contract fixture notice
+
+This directory contains twelve original fictional source/candidate cases under
+the repository LICENSE. Widget and WidgetCo are invented for tests; CVE-shaped
+identifiers, timestamps and history checksums are sample values, not statements
+about real vulnerabilities or publications. All source URLs use reserved .example
+names. No captured production draft, CVE record, third-party advisory text, or
+live model output is retained.
+
+Three captured incident artifacts imported during integration were removed in
+full, rather than asserting redistribution rights over their contents. New
+fictional candidates preserve the missing-guidance and corrected-notice cases.
+A separate marketplace-product-label case checks canonical product naming.
+The parent provenance.json records the imported revision, removed-file hashes,
+transformation and hashes of all current inputs. No new license is assigned to
+the removed material.
+
+Expected accept/reject labels express the publication requirements. Each case
+crosses manual validation, stored-brief public rendering/backfill, durable outbox
+with restart, and same-identity replacement. Rejected replacements must preserve
+the previous durable snapshot. The repair case also passes an authored response
+that omits the body through the real repair path and publication validation.
+The baseline requires every case, every route and full acceptance/rejection
+recall. Missing required inputs fail; they do not skip the gate.
+
+Run the combined offline extraction and publication contract gate:
+  go test ./internal/eval -run '^TestEvalGate$' -count=1
+
+This is deterministic contract validation, not measured model accuracy, factual
+grounding accuracy, paid inference, or a production-savings benchmark. Live
+experiments through cmd/eval are separate and may incur provider charges.

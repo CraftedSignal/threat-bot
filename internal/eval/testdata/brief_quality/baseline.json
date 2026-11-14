@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "kind": "deterministic-publication-contract",
+  "minimum_cases": 12,
+  "required_case_ids": [
+    "notice-without-guidance",
+    "notice-corrected",
+    "valid-notice",
+    "qa-veto",
+    "missing-coverage",
+    "schema-missing-title",
+    "provenance-missing-source",
+    "history-correction",
+    "history-missing-revision",
+    "repair-omits-body",
+    "operational-hunt",
+    "marketplace-product-label"
+  ],
+  "required_routes": [
+    "manual",
+    "outbox",
+    "backfill",
+    "update"
+  ],
+  "minimum_rejection_recall": 1,
+  "minimum_acceptance_recall": 1
+}

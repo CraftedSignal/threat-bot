@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "repository": "https://github.com/center-for-threat-informed-defense/tram",
+    "commit": "f29793d8d665f7f552898696e00065ef24a29a20",
+    "path": "data/tram2-data",
+    "files_removed": {
+      "single_label.json": {
+        "sha256": "7f9966dd8647e777e28e02aa08d7a38499f4b6ba5682a2366508a7b63b82cc0f",
+        "bytes": 1024483,
+        "rows": 5089
+      },
+      "multi_label.json": {
+        "sha256": "8a0c6644e4477eab28c92efd3bd7004b9563cb120ae1681d7d0a05dc170cd91b",
+        "bytes": 5846167,
+        "rows": 19178
+      }
+    }
+  },
+  "transformation": {
+    "date": "2026-11-14",
+    "description": "Removed both full upstream excerpt datasets. Replaced single_label.json with twelve original fictional sentences in four documents; removed multi_label.json entirely. Labels and data layout follow the existing evaluation format. No upstream report text or credential value is retained. Replay responses are manually authored, not outputs recorded from a live model."
+  },
+  "files": {
+    "single_label.json": {
+      "sha256": "e3827bd795cf84e021f312c09dfaa2bd556b688a20b6492a2def1b37b9663c79",
+      "bytes": 2209
+    },
+    "fixtures.json": {
+      "sha256": "29f632131ba05959a0bf99c82d4b5aa71f856d89b361e4542b4c4e7cb9cb5686",
+      "bytes": 813
+    },
+    "baseline.json": {
+      "sha256": "8dabb9f219d24a3e91601db3a861ea48126f582ffdfc4a49bf87ee492995e2e7",
+      "bytes": 193
+    },
+    "TRAM-NOTICE.txt": {
+      "sha256": "3b0fb65359098f6d7d302ef10f932345aa4a76e61fa5c22bb447cafb7a723ad0",
+      "bytes": 749
+    },
+    "brief_quality/NOTICE": {
+      "sha256": "bd0e8b76c35ff26e93652366e815acc9c65245fcaff7d84704cce6d9d0bb4d47",
+      "bytes": 1851
+    },
+    "brief_quality/baseline.json": {
+      "sha256": "f9729a6eacaeb1115b0db9d7de8dd3325b84217835791aaabbe8cc2d2b08e2fe",
+      "bytes": 586
+    },
+    "brief_quality/corpus.json": {
+      "sha256": "c680c6de1fb2a55b98c7df479645aba0e11d0705c6aec659949478b52ce56f81",
+      "bytes": 4537
+    },
+    "brief_quality/history-correction.json": {
+      "sha256": "d8d44b1419e180ee1cb109de08dfaa3b3357f148ac4dc2420a95344e056b1642",
+      "bytes": 1394
+    },
+    "brief_quality/history-missing-revision.json": {
+      "sha256": "912d95cb5acaa029c6578497e6d517ebd76e2cf6b510141b820a48bf8f1dd4e8",
+      "bytes": 918
+    },
+    "brief_quality/marketplace-product-label.json": {
+      "sha256": "9b5c91facca331923f0eed6408dd9c4cf15e3ca063bb9faea4a5e1f8413dff71",
+      "bytes": 925
+    },
+    "brief_quality/missing-coverage.json": {
+      "sha256": "5f64d9f017e2df73b2e5cafe40bb79e33f29269e2bfc10c3b985775e1d9227c4",
+      "bytes": 1175
+    },
+    "brief_quality/notice-corrected.json": {
+      "sha256": "7036821ef643feb1f32f1e4c2d29b915a8007fa955152fe14f6568171569149c",
+      "bytes": 1069
+    },
+    "brief_quality/notice-without-guidance.json": {
+      "sha256": "b3643290b53d37b3881a573d7191e55da507c94da6d7efc73b64abbead91995a",
+      "bytes": 825
+    },
+    "brief_quality/operational-hunt.json": {
+      "sha256": "a2881b17e9f2b88c296abce2ae04acaceb011dc8f96b8d27367493c3e189686a",
+      "bytes": 1311
+    },
+    "brief_quality/provenance-missing-source.json": {
+      "sha256": "297ca951110677a1717f4e4423b28008e8be99be208a41a294090fc296dd7369",
+      "bytes": 931
+    },
+    "brief_quality/qa-veto.json": {
+      "sha256": "4f6064873093f1f584b61c813be78b9beb422e6082721e642fce585b105d7c2a",
+      "bytes": 955
+    },
+    "brief_quality/repair-omits-body.json": {
+      "sha256": "f2c709ee7ea499f255d695f694155676b9b3e131bf511138b75c4ee6d846b5ad",
+      "bytes": 609
+    },
+    "brief_quality/schema-missing-title.json": {
+      "sha256": "718053398ece0ff375899867144e41f0d91c0abfde21eefe67be1439cbe01bd8",
+      "bytes": 840
+    },
+    "brief_quality/valid-notice.json": {
+      "sha256": "cc6c7536b9a5ff75a3ff37a5e89386b99254a52e12a5e125bac85333273d1d60",
+      "bytes": 901
+    },
+    "brief_quality/widget-source.json": {
+      "sha256": "28b58a9cd81a21425429045b79a9e1ad104922f71d908c174c939fc39ccde0f9",
+      "bytes": 485
+    },
+    "NOTICE": {
+      "sha256": "cf99737d91ed104154920fcb5e829ae4d837b748b7f2f2f3b0bd9ec1541d8392",
+      "bytes": 1485
+    }
+  },
+  "publication_contract": {
+    "integration_source_commit": "e0c9cafb6fd875f644e5b9c8154725cba6cd8a26",
+    "files_removed": {
+      "optimole-original.yaml": {
+        "sha256": "41a74e46650a4c0381b802a6bbd36d603e1ecc8dfbbbcb839aed9f36cf33002e",
+        "bytes": 2359
+      },
+      "optimole-corrected.yaml": {
+        "sha256": "6a2581b8d43054845757f521558bb8c8f3d84cfcd58016285b251d680b83aaf3",
+        "bytes": 5469
+      },
+      "optimole-source.json": {
+        "sha256": "510523dea535b1c3034db45fb62f1f0526ebd59235092557b6162c0579dd2d37",
+        "bytes": 3211
+      }
+    },
+    "transformation": {
+      "date": "2026-11-14",
+      "description": "Removed all three captured incident artifacts without asserting redistribution rights. Replaced the original/corrected pair with original fictional missing-guidance/corrected-notice candidates using the authored Widget source, and added a separate marketplace-label rejection case. Preserved the other original authored cases. All current source and candidate fixtures are synthetic; no recorded model output or captured third-party report remains."
+    },
+    "license": "Original fictional fixtures follow the repository LICENSE; no new license is assigned to removed material."
+  }
+}

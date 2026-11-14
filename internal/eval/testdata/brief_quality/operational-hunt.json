@@ -1,0 +1,48 @@
+{
+  "id": "brief-corpus-widget",
+  "slug": "2026-11-corpus-widget",
+  "title": "Widget arbitrary file deletion (CVE-2026-4242)",
+  "summary": "Widget 2.1 permits arbitrary file deletion with administrator interaction.",
+  "severity": "high",
+  "published_at": "2026-11-14T06:00:00Z",
+  "content": "Widget 2.1 permits arbitrary file deletion when an administrator renames an attachment.",
+  "affected_vendors": [
+    "WidgetCo"
+  ],
+  "affected_products": [
+    "Widget (2.1)"
+  ],
+  "cves": [
+    {
+      "id": "CVE-2026-4242",
+      "kev_status": "unknown"
+    }
+  ],
+  "references": [
+    "https://vendor.example/widget/advisory"
+  ],
+  "exploitation_evidence": {
+    "status": "unknown"
+  },
+  "ttps": [
+    {
+      "tactic_id": "TA0001",
+      "tactic_name": "Initial Access",
+      "technique_id": "T1190",
+      "technique_name": "Exploit Public-Facing Application",
+      "evidence": "Audit records show an HTTP POST to /rename before file deletion."
+    }
+  ],
+  "action_plan": {
+    "hunt_leads": [
+      {
+        "lead": "Review POST requests to /rename preceding unexplained file deletion.",
+        "evidence": "Audit records show an HTTP POST to /rename before file deletion.",
+        "data_needed": [
+          "Web access logs",
+          "File-integrity records"
+        ]
+      }
+    ]
+  }
+}

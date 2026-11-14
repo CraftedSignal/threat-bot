@@ -1,0 +1,34 @@
+# Local draft mode: persistent SQLite, no publishing credentials required.
+# Start Ollama and pull this model before check-llm/run. Model output quality
+# depends on the model version and hardware; review drafts before publishing.
+db:
+  path: ./data/threat-bot.db
+llm:
+  provider: ollama
+  endpoint: http://localhost:11434
+  model: qwen3:8b
+pipeline:
+  auto_publish: false
+  quality_threshold: 3.5
+  initial_lookback: 24h
+sources:
+  # Live ingestion contacts this public source and enrichment services.
+  cisa_kev:
+    enabled: true
+    poll_interval: 1h
+  # Token-bearing bridge feeds are opt-in and belong in private config.
+  ronin66:
+    enabled: false
+    poll_interval: 2h
+    feed_url: ""
+monitoring:
+  # Empty disables public-site freshness requests.
+  public_feed_url: ""
+# Optional GitHub publishing: see examples/config.github.yaml and docs/configuration.md.
+# publish:
+#   repo_slug: owner/feed-repository
+#   feed_public_key: <64 hexadecimal characters; public compatibility key>
+#   site_url: https://feed.example.org
+#   branch: main
+#   author_name: threat-bot
+#   author_email: threat-bot@users.noreply.github.com

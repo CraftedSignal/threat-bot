@@ -1,0 +1,112 @@
+{
+  "type": "bundle",
+  "id": "bundle--250b78dc-def3-5480-a051-839ae51725ca",
+  "objects": [
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--36fac444-61e3-5e99-a69d-42438a455876",
+      "created_by_ref": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2025-01-01T00:00:00.000Z",
+      "modified": "2025-01-01T00:00:00.000Z",
+      "name": "PowerShell",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1059.001",
+          "url": "https://attack.mitre.org/techniques/T1059/001"
+        }
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--9745c399-5419-5ac8-bc8b-7626b3c97937",
+      "created_by_ref": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2025-01-01T00:00:00.000Z",
+      "modified": "2025-01-01T00:00:00.000Z",
+      "name": "Spearphishing Attachment",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1566.001",
+          "url": "https://attack.mitre.org/techniques/T1566/001"
+        }
+      ]
+    },
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2025-01-01T00:00:00.000Z",
+      "modified": "2025-01-01T00:00:00.000Z",
+      "name": "CraftedSignal",
+      "identity_class": "organization"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--6e7e5f58-13ef-5eb9-84f7-f46563739451",
+      "created_by_ref": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2026-01-01T12:00:00.000Z",
+      "modified": "2026-01-01T12:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "report--39ba8689-dfe9-5826-8b59-914fa6152aab",
+      "target_ref": "attack-pattern--36fac444-61e3-5e99-a69d-42438a455876"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--d710f8ad-d59c-51f7-b770-bbff8a4f187e",
+      "created_by_ref": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2026-01-01T12:00:00.000Z",
+      "modified": "2026-01-01T12:00:00.000Z",
+      "relationship_type": "uses",
+      "source_ref": "report--39ba8689-dfe9-5826-8b59-914fa6152aab",
+      "target_ref": "attack-pattern--9745c399-5419-5ac8-bc8b-7626b3c97937"
+    },
+    {
+      "type": "report",
+      "spec_version": "2.1",
+      "id": "report--39ba8689-dfe9-5826-8b59-914fa6152aab",
+      "created_by_ref": "identity--08adab07-f58c-527d-9c31-5fab939b0d7f",
+      "created": "2026-01-01T12:00:00.000Z",
+      "modified": "2026-01-01T12:00:00.000Z",
+      "name": "Synthetic exercise: suspicious PowerShell after an attachment",
+      "description": "Review the exercise ground truth and correlate mail delivery with endpoint process ancestry.",
+      "published": "2026-01-01T12:00:00.000Z",
+      "labels": [
+        "synthetic",
+        "training"
+      ],
+      "object_refs": [
+        "attack-pattern--36fac444-61e3-5e99-a69d-42438a455876",
+        "attack-pattern--9745c399-5419-5ac8-bc8b-7626b3c97937",
+        "identity--08adab07-f58c-527d-9c31-5fab939b0d7f"
+      ],
+      "external_references": [
+        {
+          "source_name": "craftedsignal",
+          "external_id": "synthetic-training-attachment",
+          "url": "https://example.org/briefs/synthetic-training-attachment/"
+        },
+        {
+          "source_name": "reference",
+          "url": "https://example.org/training/report"
+        }
+      ],
+      "confidence": 40,
+      "x_craftedsignal_brief_id": "synthetic-training-attachment",
+      "x_craftedsignal_event_id": "synthetic-training-attachment",
+      "x_craftedsignal_revision": 1,
+      "x_craftedsignal_canonical_url": "https://example.org/briefs/synthetic-training-attachment/",
+      "x_craftedsignal_activity_at": "2026-01-01T12:00:00.000Z",
+      "x_craftedsignal_severity": "low",
+      "x_craftedsignal_type": "advisory",
+      "x_craftedsignal_exploitation_evidence": {
+        "status": "unknown"
+      },
+      "x_craftedsignal_kev_status": "unknown"
+    }
+  ]
+}

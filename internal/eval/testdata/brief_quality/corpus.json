@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "notice-without-guidance",
+      "source_path": "widget-source.json",
+      "candidate_path": "notice-without-guidance.json",
+      "source_provenance": "original fictional advisory fixture; no captured report text",
+      "candidate_provenance": "original synthetic missing-guidance case",
+      "expected": "reject",
+      "category": "operational-guidance",
+      "reject_contains": "recommendation"
+    },
+    {
+      "id": "notice-corrected",
+      "source_path": "widget-source.json",
+      "candidate_path": "notice-corrected.json",
+      "source_provenance": "original fictional advisory fixture; no captured report text",
+      "candidate_provenance": "original synthetic correction",
+      "expected": "accept",
+      "category": "operational-guidance",
+      "reject_contains": ""
+    },
+    {
+      "id": "valid-notice",
+      "source_path": "widget-source.json",
+      "candidate_path": "valid-notice.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-positive",
+      "expected": "accept",
+      "category": "short-source",
+      "reject_contains": ""
+    },
+    {
+      "id": "qa-veto",
+      "source_path": "widget-source.json",
+      "candidate_path": "qa-veto.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "qa-veto",
+      "reject_contains": "QA assessment"
+    },
+    {
+      "id": "missing-coverage",
+      "source_path": "widget-source.json",
+      "candidate_path": "missing-coverage.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "coverage",
+      "reject_contains": "rule or hunt lead"
+    },
+    {
+      "id": "schema-missing-title",
+      "source_path": "widget-source.json",
+      "candidate_path": "schema-missing-title.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "schema",
+      "reject_contains": "title"
+    },
+    {
+      "id": "provenance-missing-source",
+      "source_path": "widget-source.json",
+      "candidate_path": "provenance-missing-source.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "provenance",
+      "reject_contains": "source"
+    },
+    {
+      "id": "history-correction",
+      "source_path": "widget-source.json",
+      "candidate_path": "history-correction.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-positive",
+      "expected": "accept",
+      "category": "history",
+      "reject_contains": ""
+    },
+    {
+      "id": "history-missing-revision",
+      "source_path": "widget-source.json",
+      "candidate_path": "history-missing-revision.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "history",
+      "reject_contains": "revision"
+    },
+    {
+      "id": "repair-omits-body",
+      "source_path": "widget-source.json",
+      "candidate_path": "repair-omits-body.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-adversarial",
+      "expected": "reject",
+      "category": "repair",
+      "reject_contains": "content"
+    },
+    {
+      "id": "operational-hunt",
+      "source_path": "widget-source.json",
+      "candidate_path": "operational-hunt.json",
+      "source_provenance": "explicitly hand-authored advisory fixture",
+      "candidate_provenance": "hand-authored-positive",
+      "expected": "accept",
+      "category": "coverage",
+      "reject_contains": ""
+    },
+    {
+      "id": "marketplace-product-label",
+      "source_path": "widget-source.json",
+      "candidate_path": "marketplace-product-label.json",
+      "source_provenance": "original fictional advisory fixture; no captured report text",
+      "candidate_provenance": "original synthetic marketplace-label case",
+      "expected": "reject",
+      "category": "canonical-product",
+      "reject_contains": "canonical name"
+    }
+  ]
+}

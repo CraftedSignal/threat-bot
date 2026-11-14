@@ -1,0 +1,81 @@
+{
+  "repository": "https://github.com/CraftedSignal/threat-feed",
+  "revision": "8805c49b470aec2f2e214d3d5add49f0828dcb28",
+  "transformation": "Initial import: move the real brief-validator implementation and tests to a public package, updating the module import; omit unused feed-site-specific STIX/sitemap validation and helpers. Original import hashes retain that boundary. Later first-party readiness adaptations have separate adapted hashes and an explicit local-file origin inventory; IOC validation and MITRE tables remain unchanged.",
+  "files": [
+    {
+      "source": "pkg/ioc/verify.go",
+      "destination": "pkg/ioc/verify.go",
+      "upstream_sha256": "32e988dc8a71becd20a14d2d2c5636f08deed5c614a6916ff4576ef907ff09b6",
+      "imported_sha256": "32e988dc8a71becd20a14d2d2c5636f08deed5c614a6916ff4576ef907ff09b6"
+    },
+    {
+      "source": "pkg/ioc/verify_test.go",
+      "destination": "pkg/ioc/verify_test.go",
+      "upstream_sha256": "c1f2adb38f2b74795c34c94a6ec0a8360076db5466c7a66aa731fdc30ada28de",
+      "imported_sha256": "c1f2adb38f2b74795c34c94a6ec0a8360076db5466c7a66aa731fdc30ada28de"
+    },
+    {
+      "source": "pkg/mitre/attack.go",
+      "destination": "pkg/mitre/attack.go",
+      "upstream_sha256": "6122ab21ae8b3c6e61b5d5bd45060733bf402e547122fd0a0ff2b66e4e269d11",
+      "imported_sha256": "6122ab21ae8b3c6e61b5d5bd45060733bf402e547122fd0a0ff2b66e4e269d11"
+    },
+    {
+      "source": "pkg/mitre/attack_test.go",
+      "destination": "pkg/mitre/attack_test.go",
+      "upstream_sha256": "add5a4445e685548621f3bd25e06557d47cebf72c3c9ee394ae3fa047fffd2de",
+      "imported_sha256": "add5a4445e685548621f3bd25e06557d47cebf72c3c9ee394ae3fa047fffd2de"
+    },
+    {
+      "source": "internal/publicfeed/check.go",
+      "destination": "pkg/publicfeed/check.go",
+      "upstream_sha256": "8bb0e8f9548231ebfc7f6dd14c09b9fde8fa2085436f7aef1cc3b1b5aac42c68",
+      "imported_sha256": "6a2c4890a9dd1ba4066ac10c91c941ed0ceaf33987de750bfc20c03a4fd0d6ff",
+      "adapted_sha256": "2e45335c38ec0cdcb4f26f8a33694c0e96b7e11a285fbcf7d55e0178ff6d19ba",
+      "adaptation": "First-party adaptation: include description and action_plan in the decoded brief and apply the shared narrative/action-plan readiness contract."
+    },
+    {
+      "source": "internal/publicfeed/check_test.go",
+      "destination": "pkg/publicfeed/check_test.go",
+      "upstream_sha256": "e93325b22c166730a455a5b4341f98e4fc6913f47637def8cd1cc03627a6a8e9",
+      "imported_sha256": "1d4c07238ee7999680b92b64d5fd1d3a946f3fa06e0c033b18d94c5df747032e",
+      "adapted_sha256": "1fa3e449eb2f82d588479ac60afab0169fe02be2792b00b65f46552a32033eb4",
+      "adaptation": "First-party adaptation: add fictional remediation guidance to the existing valid-brief fixture for the shared readiness contract."
+    }
+  ],
+  "upstream_license": {
+    "path": "LICENSE",
+    "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "license_text": "GNU Affero General Public License, Version 3",
+    "evidence": "git show 8805c49b470aec2f2e214d3d5add49f0828dcb28:LICENSE from full source repository; sparse audit checkout omitted this file"
+  },
+  "local_files": [
+    {
+      "path": "pkg/publicfeed/quality.go",
+      "sha256": "a4dec8e8769df3798de840d93d7a93e8c1b3c8d20b2b52dbe0d5a8a05c694c3e",
+      "origin": {
+        "repository": "CraftedSignal/ti-bot",
+        "revision": "5675ba82abbf0c71e9d4388ff59e5f6378db15a9",
+        "path": "pkg/publicfeed/quality.go",
+        "sha256": "9a2af246c976304fa773355dc92ba6f62d752b2fc53bd6c3ac5093d92092f9ea",
+        "license_path": "LICENSE",
+        "license_sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+      },
+      "transformation": "Copy the first-party shared narrative/action-plan readiness implementation; replace two fence-state if/else chains with equivalent switch statements for QF1003 lint compliance and apply gofmt."
+    },
+    {
+      "path": "pkg/publicfeed/quality_test.go",
+      "sha256": "a29a2714de1c5775a568c204f880076f611eac850a572edb04c30ae0f5d6c98c",
+      "origin": {
+        "repository": "CraftedSignal/ti-bot",
+        "revision": "5675ba82abbf0c71e9d4388ff59e5f6378db15a9",
+        "path": "pkg/publicfeed/quality_test.go",
+        "sha256": "78fe2965577424600ea66cccda9272e26092eb481d7501ed4a391ac4ddd53b8b",
+        "license_path": "LICENSE",
+        "license_sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+      },
+      "transformation": "Copy first-party readiness tests, replacing real product-label and filename references with fictional Widget/fixture names; no captured production brief is included."
+    }
+  ]
+}

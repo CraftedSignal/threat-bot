@@ -1,0 +1,2 @@
+# Preserve upstream license notices byte-for-byte, including final blank lines.
+LICENSES/dependencies/** whitespace=-blank-at-eof

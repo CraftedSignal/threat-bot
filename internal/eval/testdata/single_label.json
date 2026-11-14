@@ -1,0 +1,62 @@
+[
+  {
+    "doc_title": "Synthetic attachment investigation",
+    "text": "In this fictional exercise, the analyst observed a phishing email containing a malicious attachment.",
+    "label": "T1566.001"
+  },
+  {
+    "doc_title": "Synthetic attachment investigation",
+    "text": "The fictional attachment launched a PowerShell command interpreter.",
+    "label": "T1059.001"
+  },
+  {
+    "doc_title": "Synthetic attachment investigation",
+    "text": "A second phishing attachment appeared in the same fictional exercise.",
+    "label": "T1566.001"
+  },
+  {
+    "doc_title": "Synthetic scheduled task investigation",
+    "text": "In this fictional Windows exercise, a scheduled task was created to run the simulated program later.",
+    "label": "T1053.005"
+  },
+  {
+    "doc_title": "Synthetic scheduled task investigation",
+    "text": "The simulated program used the Windows command shell for execution.",
+    "label": "T1059.003"
+  },
+  {
+    "doc_title": "Synthetic scheduled task investigation",
+    "text": "The analyst recorded a second scheduled task created by the same simulated program.",
+    "label": "T1053.005"
+  },
+  {
+    "doc_title": "Synthetic discovery investigation",
+    "text": "In this fictional exercise, the simulated program enumerated running processes.",
+    "label": "T1057"
+  },
+  {
+    "doc_title": "Synthetic discovery investigation",
+    "text": "The simulated program collected the operating system version and host name.",
+    "label": "T1082"
+  },
+  {
+    "doc_title": "Synthetic discovery investigation",
+    "text": "The analyst observed the simulated program listing local files and directories.",
+    "label": "T1083"
+  },
+  {
+    "doc_title": "Synthetic credential investigation",
+    "text": "In this fictional Windows exercise, a simulation attempted to read credentials from LSASS memory.",
+    "label": "T1003.001"
+  },
+  {
+    "doc_title": "Synthetic credential investigation",
+    "text": "The exercise then simulated use of a previously compromised valid account.",
+    "label": "T1078"
+  },
+  {
+    "doc_title": "Synthetic credential investigation",
+    "text": "The analyst recorded a second simulated access to LSASS memory.",
+    "label": "T1003.001"
+  }
+]

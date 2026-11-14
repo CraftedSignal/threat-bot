@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: "off"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify modules, format, race tests, vet, build and examples
+        run: |
+          go mod download
+          go mod verify
+          make format-check test-race vet docs-check licenses-check
+      - name: Install pinned linters
+        run: |
+          GOBIN="$PWD/.tools/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          GOBIN="$PWD/.tools/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Lint source and workflows
+        run: make lint actionlint
+  security:
+    name: Security checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned security tools
+        run: |
+          GOBIN="$RUNNER_TEMP/tools" go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+          GOBIN="$RUNNER_TEMP/tools" go install github.com/zricethezav/gitleaks/v8@v8.30.1
+      - name: Scan dependencies and exact source snapshot
+        run: |
+          "$RUNNER_TEMP/tools/govulncheck" ./...
+          "$RUNNER_TEMP/tools/gitleaks" dir --redact --no-banner .
+  container:
+    name: Container smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build ordinary container and validate offline
+        run: make docker-smoke
+  checks:
+    name: Checks
+    if: always()
+    needs: [go, security, container]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every check
+        env:
+          GO_RESULT: ${{ needs.go.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          CONTAINER_RESULT: ${{ needs.container.result }}
+        run: |
+          test "$GO_RESULT" = success
+          test "$SECURITY_RESULT" = success
+          test "$CONTAINER_RESULT" = success

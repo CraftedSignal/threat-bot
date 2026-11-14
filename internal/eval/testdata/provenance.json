@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "repository": "https://github.com/center-for-threat-informed-defense/tram",
+    "commit": "f29793d8d665f7f552898696e00065ef24a29a20",
+    "path": "data/tram2-data",
+    "files_removed": {
+      "single_label.json": {
+        "sha256": "7f9966dd8647e777e28e02aa08d7a38499f4b6ba5682a2366508a7b63b82cc0f",
+        "bytes": 1024483,
+        "rows": 5089
+      },
+      "multi_label.json": {
+        "sha256": "8a0c6644e4477eab28c92efd3bd7004b9563cb120ae1681d7d0a05dc170cd91b",
+        "bytes": 5846167,
+        "rows": 19178
+      }
+    }
+  },
+  "transformation": {
+    "date": "2026-11-14",
+    "description": "Removed both full upstream excerpt datasets. Replaced single_label.json with twelve original fictional sentences in four documents; removed multi_label.json entirely. Labels and data layout follow the existing evaluation format. No upstream report text or credential value is retained. Replay responses are manually authored, not outputs recorded from a live model."
+  },
+  "files": {
+    "single_label.json": {
+      "sha256": "e3827bd795cf84e021f312c09dfaa2bd556b688a20b6492a2def1b37b9663c79",
+      "bytes": 2209
+    },
+    "fixtures.json": {
+      "sha256": "29f632131ba05959a0bf99c82d4b5aa71f856d89b361e4542b4c4e7cb9cb5686",
+      "bytes": 813
+    },
+    "baseline.json": {
+      "sha256": "8dabb9f219d24a3e91601db3a861ea48126f582ffdfc4a49bf87ee492995e2e7",
+      "bytes": 193
+    },
+    "TRAM-NOTICE.txt": {
+      "sha256": "3b0fb65359098f6d7d302ef10f932345aa4a76e61fa5c22bb447cafb7a723ad0",
+      "bytes": 749
+    }
+  }
+}

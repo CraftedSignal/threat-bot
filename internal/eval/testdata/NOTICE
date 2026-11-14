@@ -1,0 +1,22 @@
+Evaluation fixture notice
+
+The current single_label.json contains twelve original, fictional sentences
+written for threat-bot regression tests. It replaces the full TRAM excerpt
+dataset. multi_label.json has been removed. fixtures.json contains manually
+authored extractor responses, and baseline.json defines the synthetic replay
+expectation. These are not recorded live-model results or an accuracy benchmark.
+The new original fixtures follow the repository LICENSE.
+
+Earlier snapshots included the TRAM (Threat Report ATT&CK Mapper) dataset from
+the Center for Threat-Informed Defense:
+Source: https://github.com/center-for-threat-informed-defense/tram
+Path: data/tram2-data/
+Commit: f29793d8d665f7f552898696e00065ef24a29a20
+Upstream license: Apache License 2.0
+
+The upstream full license is preserved at ../../../LICENSES/Apache-2.0.txt.
+The upstream NOTICE is retained verbatim in TRAM-NOTICE.txt for provenance.
+provenance.json records original hashes, complete replacement, and new hashes.
+No TRAM source code or original report excerpts are included in this directory.
+ATT&CK is a registered trademark of The MITRE Corporation. Technique identifiers
+refer to MITRE ATT&CK; see https://attack.mitre.org/resources/terms-of-use/.

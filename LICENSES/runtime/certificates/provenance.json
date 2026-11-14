@@ -1,0 +1,33 @@
+{
+  "builder_copy_instructions": [
+    "COPY --from=builder /runtime/ /",
+    "COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt",
+    "COPY --from=builder --chmod=755 /threat-bot /app/threat-bot"
+  ],
+  "builder_image": "golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf",
+  "copied_file": "/etc/ssl/certs/ca-certificates.crt",
+  "notice_files": [
+    {
+      "path": "LICENSES/MPL-2.0.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    {
+      "path": "LICENSES/runtime/certificates/NOTICE",
+      "sha256": "34d80499dc4101da85a95f3e84834c695c905d6f370b9079fa1b7ab9d848dc40"
+    }
+  ],
+  "package": {
+    "declared_license": "MPL-2.0 AND MIT",
+    "name": "ca-certificates-bundle",
+    "version": "20261020-r0"
+  },
+  "review": "The pinned builder package metadata and upstream APKBUILD/source archive were inspected. The automated check verifies the recorded image pin, copy path, and notice hashes; it does not independently inspect a running image.",
+  "schema_version": 1,
+  "source": {
+    "certificate_source": "ca-certificates-20261020/certdata.txt",
+    "certificate_source_sha256": "3ec2b4d240dc12c747eaf450061db84af757c483bbda302f9e29ceb5d70be510",
+    "sha512": "d28eb01751b1a914ffb5d8cb99e662f0a35a95148c21dcf98de1ab3108b54db9714a99472d07715023867f4f76a21f2a79a2bc1c7e9876ce5167fdd865ad2dd7",
+    "transformation": "Alpine build converts certdata.txt to PEM certificate files and concatenates them in sorted order; threat-bot copies the resulting bundle without modifying it.",
+    "url": "https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20261020/ca-certificates-20261020.tar.bz2"
+  }
+}

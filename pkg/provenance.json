@@ -1,0 +1,49 @@
+{
+  "repository": "https://github.com/CraftedSignal/threat-feed",
+  "revision": "8805c49b470aec2f2e214d3d5add49f0828dcb28",
+  "transformation": "Move real brief-validator implementation and its tests to public package, updating the module import. Omit unused feed-site-specific STIX/sitemap validation and helpers; preserve brief validation behavior, IOC validation and MITRE tables.",
+  "files": [
+    {
+      "source": "pkg/ioc/verify.go",
+      "destination": "pkg/ioc/verify.go",
+      "upstream_sha256": "32e988dc8a71becd20a14d2d2c5636f08deed5c614a6916ff4576ef907ff09b6",
+      "imported_sha256": "32e988dc8a71becd20a14d2d2c5636f08deed5c614a6916ff4576ef907ff09b6"
+    },
+    {
+      "source": "pkg/ioc/verify_test.go",
+      "destination": "pkg/ioc/verify_test.go",
+      "upstream_sha256": "c1f2adb38f2b74795c34c94a6ec0a8360076db5466c7a66aa731fdc30ada28de",
+      "imported_sha256": "c1f2adb38f2b74795c34c94a6ec0a8360076db5466c7a66aa731fdc30ada28de"
+    },
+    {
+      "source": "pkg/mitre/attack.go",
+      "destination": "pkg/mitre/attack.go",
+      "upstream_sha256": "6122ab21ae8b3c6e61b5d5bd45060733bf402e547122fd0a0ff2b66e4e269d11",
+      "imported_sha256": "6122ab21ae8b3c6e61b5d5bd45060733bf402e547122fd0a0ff2b66e4e269d11"
+    },
+    {
+      "source": "pkg/mitre/attack_test.go",
+      "destination": "pkg/mitre/attack_test.go",
+      "upstream_sha256": "add5a4445e685548621f3bd25e06557d47cebf72c3c9ee394ae3fa047fffd2de",
+      "imported_sha256": "add5a4445e685548621f3bd25e06557d47cebf72c3c9ee394ae3fa047fffd2de"
+    },
+    {
+      "source": "internal/publicfeed/check.go",
+      "destination": "pkg/publicfeed/check.go",
+      "upstream_sha256": "8bb0e8f9548231ebfc7f6dd14c09b9fde8fa2085436f7aef1cc3b1b5aac42c68",
+      "imported_sha256": "6a2c4890a9dd1ba4066ac10c91c941ed0ceaf33987de750bfc20c03a4fd0d6ff"
+    },
+    {
+      "source": "internal/publicfeed/check_test.go",
+      "destination": "pkg/publicfeed/check_test.go",
+      "upstream_sha256": "e93325b22c166730a455a5b4341f98e4fc6913f47637def8cd1cc03627a6a8e9",
+      "imported_sha256": "1d4c07238ee7999680b92b64d5fd1d3a946f3fa06e0c033b18d94c5df747032e"
+    }
+  ],
+  "upstream_license": {
+    "path": "LICENSE",
+    "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+    "license_text": "GNU Affero General Public License, Version 3",
+    "evidence": "git show 8805c49b470aec2f2e214d3d5add49f0828dcb28:LICENSE from full source repository; sparse audit checkout omitted this file"
+  }
+}

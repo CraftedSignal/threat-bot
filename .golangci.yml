@@ -1,0 +1,22 @@
+version: "2"
+run:
+  timeout: 10m
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    presets: []
+    warn-unused: true
+    rules:
+      # Test fixtures often exercise an operation before a separate assertion;
+      # production error paths stay checked and regression tests cover failures.
+      - path: _test\.go$
+        linters: [errcheck]
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,30 @@
+# Allow only the build inputs. Runtime files and untracked secrets are excluded.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**/
+!cmd/**/*.go
+!internal/
+!internal/**/
+!internal/**/*.go
+!pkg/
+!pkg/**/
+!pkg/**/*.go
+!LICENSE
+!NOTICE.md
+!LICENSES/
+!LICENSES/**
+**/*_test.go
+# Defense in depth for secret-like files even inside otherwise allowed trees.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3

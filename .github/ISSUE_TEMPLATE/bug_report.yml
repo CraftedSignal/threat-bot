@@ -1,0 +1,32 @@
+name: Bug or setup problem
+description: Report a reproducible problem with threat-bot.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: "For vulnerabilities, use the private security reporting link. Never include credentials, private database content, or subscription URLs."
+  - type: input
+    id: version
+    attributes:
+      label: Version or revision
+      description: Output of threat-bot version, plus OS and architecture.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction and expected behavior
+      description: Provide minimal commands and a redacted configuration or synthetic fixture.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Actual behavior and relevant logs
+      description: Redact secrets and personal information before submitting.
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model, if relevant

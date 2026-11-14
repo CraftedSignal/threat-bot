@@ -1,0 +1,9 @@
+# Source provenance
+
+The initial public repository is a curated source import, with independent Git history. The original historical repository remains private. The preparation baseline was application commit `d0b4befa5c8a5d51740ac193939d1a8dffe3cb8b`; the public preparation includes the changes described in [CHANGELOG.md](../CHANGELOG.md). The historical author names are retained in [AUTHORS.md](../AUTHORS.md), and existing source copyright notices remain intact.
+
+The public source excludes runtime configuration, credentials, databases, local tools, private reports, and historical agent plans. Full third-party report excerpts were replaced with original fictional evaluation data; their original upstream revision and hashes remain in [dataset provenance](../internal/eval/testdata/provenance.json). This boundary does not make an assertion about unpublished historical logs or artifacts.
+
+The shared public packages have their own [import manifest](../pkg/PROVENANCE.md), upstream revision, hashes, and transformation record. The executable uses the versions in `go.mod` and `go.sum`; [dependency notices](../LICENSES/dependencies/manifest.json) and [runtime notices](../LICENSES/runtime/go/manifest.json) are checked against the supported build.
+
+The public name is `threat-bot`. Persisted wire identifiers and production storage/identity names are compatibility boundaries; see [operations](operations.md). Production deployment source and the identity migration runbook belong in the separately managed infrastructure repository.

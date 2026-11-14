@@ -1,0 +1,7 @@
+{
+  "base_macro_f1": 1.0,
+  "base_micro_f1": 1.0,
+  "exact_macro_f1": 1.0,
+  "exact_micro_f1": 1.0,
+  "provenance": "Manually authored synthetic replay; not a measured live-model benchmark."
+}

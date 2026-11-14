@@ -8,16 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// This is the failure published on 2026-11-14: a registry description and a
-// marketplace title passed grounding, despite providing no defender response.
-const optimoleRegistryDescription = "The Optimole - Optimize Images | Convert WebP & AVIF | CDN & Lazy Load | Image Optimization plugin for WordPress is vulnerable to arbitrary file deletion due to insufficient file path validation in the replace_urls_in_value function in all versions up to, and including, 4.2.19. Exploitation requires that the PEAR Archive_Tar library is present and loadable on the host and an administrator must perform an action using the plugin's Rename control."
-const optimoleMarketplaceName = "Optimole – Optimize Images | Convert WebP & AVIF | CDN & Lazy Load | Image Optimization"
+// This fictional registry-style example lacks an operational response even
+// when its individual source claims pass grounding.
+const fixtureRegistryDescription = "The FixtureMedia image helper is affected in all versions up to, and including, 4.2.19. This fictional example requires an administrator action."
+const fixtureMarketplaceName = "FixtureMedia – Optimize Images | Convert WebP & AVIF | CDN & Lazy Load | Image Optimization"
 
 func TestPublicationRejectsRegistryDumpEvenWhenGrounded(t *testing.T) {
 	doc := map[string]any{
-		"title": "Optimole file deletion (CVE-2026-124969)", "summary": "Optimole permits file deletion with administrator interaction.",
-		"content": optimoleRegistryDescription, "affected_products": []string{optimoleMarketplaceName},
-		"cves": []string{"CVE-2026-124969"}, "qa_status": map[string]any{"verdict": "pass"},
+		"title": "FixtureMedia file deletion (CVE-2099-11111)", "summary": "FixtureMedia permits file deletion with administrator interaction.",
+		"content": fixtureRegistryDescription, "affected_products": []string{fixtureMarketplaceName},
+		"cves": []string{"CVE-2099-11111"}, "qa_status": map[string]any{"verdict": "pass"},
 	}
 	raw, err := yaml.Marshal(doc)
 	if err != nil {
@@ -73,7 +73,7 @@ func TestPublicationDoesNotCountInvalidRulesAsCoverage(t *testing.T) {
 }
 
 func TestValidatorCanonicalizesMarketplaceProductWithoutLosingRange(t *testing.T) {
-	raw := "id: brief-test\nslug: test\ntitle: Optimole advisory\nsummary: Confirmed issue.\nseverity: high\npublished_at: \"2026-11-14T06:23:40Z\"\naffected_products:\n  - '" + optimoleMarketplaceName + " (<= 4.2.19)'\n"
+	raw := "id: brief-test\nslug: test\ntitle: FixtureMedia advisory\nsummary: Confirmed issue.\nseverity: high\npublished_at: \"2026-11-14T06:23:40Z\"\naffected_products:\n  - '" + fixtureMarketplaceName + " (<= 4.2.19)'\n"
 	cleaned, _, err := NewBriefValidator().Validate(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -83,15 +83,15 @@ func TestValidatorCanonicalizesMarketplaceProductWithoutLosingRange(t *testing.T
 		t.Fatal(err)
 	}
 	got := yamlStringList(doc["affected_products"])
-	if len(got) != 1 || got[0] != "Optimole (<= 4.2.19)" {
+	if len(got) != 1 || got[0] != "FixtureMedia (<= 4.2.19)" {
 		t.Fatalf("product = %q", got)
 	}
 }
 
 func TestSourceInclusiveVersionRangeSurvivesWithoutNVDEnrichment(t *testing.T) {
-	raw := "affected_products: [Optimole]\n"
-	got := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd", Content: optimoleRegistryDescription})
-	if !strings.Contains(got, "Optimole (<= 4.2.19)") {
+	raw := "affected_products: [FixtureMedia]\n"
+	got := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd", Content: fixtureRegistryDescription})
+	if !strings.Contains(got, "FixtureMedia (<= 4.2.19)") {
 		t.Fatalf("source range missing: %s", got)
 	}
 	if strings.Contains(got, "4.2.20") {

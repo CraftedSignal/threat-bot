@@ -36,6 +36,9 @@ func callMetadata(ctx context.Context) CallMetadata {
 	m, _ := ctx.Value(callMetadataKey{}).(CallMetadata)
 	return m
 }
+
+// CallMetadataFromContext reads attribution for durable stage history.
+func CallMetadataFromContext(ctx context.Context) CallMetadata { return callMetadata(ctx) }
 func logAttrs(ctx context.Context) []any {
 	m := callMetadata(ctx)
 	return []any{"source_id", m.SourceID, "stage", m.Stage, "attempt_id", m.AttemptID}

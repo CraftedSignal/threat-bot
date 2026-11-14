@@ -152,3 +152,47 @@ func TestNewContentEnricherWiresSafeOutboundTransport(t *testing.T) {
 		t.Fatal("production transport allowed a loopback connection")
 	}
 }
+
+func TestContentEnricherDistinguishesNoAdditionalEvidenceFromFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		required bool
+		status   int
+		wantErr  bool
+		wantAdd  bool
+	}{
+		{name: "optional shorter page", body: "Security Update Guide. Enable JavaScript to run this app.", status: http.StatusOK},
+		{name: "required shorter article", body: "Fixed in version 1.2.3.", required: true, status: http.StatusOK, wantAdd: true},
+		{name: "optional empty page", status: http.StatusOK, wantErr: true},
+		{name: "required empty page", required: true, status: http.StatusOK, wantErr: true},
+		{name: "optional upstream failure", status: http.StatusServiceUnavailable, wantErr: true},
+		{name: "required upstream failure", required: true, status: http.StatusServiceUnavailable, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			e := NewContentEnricher()
+			e.client.Transport = enrichRoundTrip(func(*http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {"text/html"}}, Body: io.NopCloser(strings.NewReader("<html><body>" + tc.body + "</body></html>"))}, nil
+			})
+			original := strings.Repeat("Existing feed evidence. ", 8)
+			item := scraper.RawItem{Source: "msrc", URL: "https://example.com/fixture-advisory", Content: original, NeedsFullArticle: tc.required}
+			errs := e.Enrich(context.Background(), &item)
+			if (len(errs) != 0) != tc.wantErr {
+				t.Fatalf("errors = %v, want error %v", errs, tc.wantErr)
+			}
+			if tc.wantAdd {
+				if !strings.Contains(item.Content, tc.body) || item.NeedsFullArticle {
+					t.Fatalf("required evidence was not appended: %+v", item)
+				}
+			} else if item.Content != original || item.NeedsFullArticle != tc.required {
+				t.Fatalf("existing evidence or requirement changed: %+v", item)
+			}
+			e.Enrich(context.Background(), &item)
+			if requests != 1 {
+				t.Fatalf("fetched twice in one processing pass: %d requests", requests)
+			}
+		})
+	}
+}

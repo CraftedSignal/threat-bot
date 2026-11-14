@@ -20,11 +20,18 @@ for source in files:
         path = (root / unquote(parsed.path.lstrip("/"))) if parsed.path.startswith("/") else source.parent / unquote(parsed.path)
         if not path.exists():
             failures.append(f"{source.relative_to(root)}: missing local link {target}")
-# Verify exact imported contract source and synthetic dataset transformation hashes.
-for entry in json.loads((root / "pkg/provenance.json").read_text())["files"]:
+# Preserve original import hashes while checking intentional local adaptations.
+package_provenance = json.loads((root / "pkg/provenance.json").read_text())
+for entry in package_provenance["files"]:
     path = root / entry["destination"]
-    if hashlib.sha256(path.read_bytes()).hexdigest() != entry["imported_sha256"]:
-        failures.append(f"{path.relative_to(root)}: imported source provenance hash mismatch")
+    expected = entry.get("adapted_sha256", entry["imported_sha256"])
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        failures.append(f"{path.relative_to(root)}: package provenance hash mismatch")
+for entry in package_provenance.get("local_files", []):
+    path = root / entry["path"]
+    if hashlib.sha256(path.read_bytes()).hexdigest() != entry["sha256"]:
+        failures.append(f"{path.relative_to(root)}: local package provenance hash mismatch")
+# Verify the synthetic dataset's exact transformation hashes.
 dataset = root / "internal/eval/testdata"
 for name, expected in json.loads((dataset / "provenance.json").read_text())["files"].items():
     data = (dataset / name).read_bytes()

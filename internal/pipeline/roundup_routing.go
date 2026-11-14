@@ -49,6 +49,9 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeReviewRequired) {
+					return true
+				}
 				if errors.Is(err, errMergeRelevanceUnavailable) {
 					p.logger.Warn("merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "error", err)
 					return true
@@ -79,6 +82,9 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 			if err := p.mergeIntoDraft(ctx, targetID, extraction, item); err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
+				}
+				if errors.Is(err, errMergeReviewRequired) {
+					return true
 				}
 				if errors.Is(err, errMergeRelevanceUnavailable) {
 					p.logger.Warn("update merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", targetID, "error", err)
@@ -508,6 +514,9 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 			if err := p.mergeIntoDraft(ctx, e.DraftID, roundupExtraction, item); err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
+				}
+				if errors.Is(err, errMergeReviewRequired) {
+					return true
 				}
 				if errors.Is(err, errMergeRelevanceUnavailable) {
 					p.logger.Warn("roundup merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", e.DraftID, "error", err)

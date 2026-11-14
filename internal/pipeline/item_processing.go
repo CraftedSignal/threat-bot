@@ -31,6 +31,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	}
 
 	workStarted := false
+	var mergeExtraction *ExtractionResult
 	defer func() {
 		if !workStarted {
 			return
@@ -58,7 +59,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			return fmt.Errorf("checkpoint source identity mismatch")
 		}
 		if state.PolicyKey == p.processingPolicyKey() {
-			if cp.InputKey == key && time.Now().Before(cp.RetryAt) {
+			if state.MergeDraftID == "" && cp.InputKey == key && time.Now().Before(cp.RetryAt) {
 				return nil
 			}
 			refreshed, refreshErr := p.refreshSourceEvidence(ctx, item)
@@ -66,24 +67,48 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				return fmt.Errorf("refresh unavailable; retaining candidate and budget: %w", refreshErr)
 			}
 			item = refreshed
-			if p.processingKey(item) == state.EvidenceKey {
+			targetMatches := true
+			if state.MergeDraftID != "" {
+				targetKey, targetErr := p.mergeTargetKey(state.MergeDraftID)
+				if targetErr != nil && !errors.Is(targetErr, errMergeTargetMissing) {
+					return fmt.Errorf("reading merge target; retaining candidate and budget: %w", targetErr)
+				}
+				targetMatches = targetErr == nil && targetKey == state.MergeTargetKey
+			}
+			if p.processingKey(item) == state.EvidenceKey && targetMatches {
 				state.Item.Revision = item.Revision
 				state.Item.UpdatedAt = item.UpdatedAt
 				if err := p.saveCandidate(key, state, cp.RetryAt); err != nil {
 					return err
 				}
-				if state.ReviewHold || time.Now().Before(cp.RetryAt) {
+				if state.ReviewHold {
+					if state.MergeDraftID != "" {
+						return p.ensureMergeReviewVisible(key, state, strings.Join(state.Issues, "; "))
+					}
+					return nil
+				}
+				if time.Now().Before(cp.RetryAt) {
 					return nil
 				}
 				workStarted = true
 				state.AttemptID = attemptID
-				p.logger.Info("resuming validated candidate", "source_id", item.SourceID, "stage", "grounding")
-				return p.processCandidate(ctx, key, state)
+				if state.MergeDraftID == "" {
+					p.logger.Info("resuming validated candidate", "source_id", item.SourceID, "stage", "grounding")
+					return p.processCandidate(ctx, key, state)
+				}
+				if state.Extraction == nil {
+					return fmt.Errorf("merge checkpoint has no extraction")
+				}
+				mergeExtraction = cloneExtraction(state.Extraction)
+				p.logger.Info("resuming merge candidate", "source_id", item.SourceID, "draft_id", state.MergeDraftID, "stage", "merge_assessment")
+			} else {
+				p.logger.Info("source evidence or merge target changed; rebuilding candidate", "source_id", item.SourceID)
 			}
-			p.logger.Info("source evidence changed; rebuilding candidate", "source_id", item.SourceID)
 		}
-		if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
-			return err
+		if mergeExtraction == nil {
+			if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -133,7 +158,11 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		// union its structured fields into the existing draft so the
 		// next render benefits from the richer source.
 		targetID := dedupEntries[0].DraftID
-		extraction, extractErr := p.extractor.Extract(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "extraction"}), item)
+		extraction := cloneExtraction(mergeExtraction)
+		var extractErr error
+		if mergeExtraction == nil {
+			extraction, extractErr = p.extractor.Extract(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "extraction"}), item)
+		}
 		if extractErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(extractErr, ctxErr) {
 				return ctxErr
@@ -147,6 +176,8 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		switch {
 		case err == nil:
 			p.logger.Info("merged into thin draft", "source_id", item.SourceID, "draft_id", targetID)
+		case errors.Is(err, errMergeReviewRequired):
+			return nil
 		case errors.Is(err, errMergeRelevanceUnavailable):
 			return fmt.Errorf("merge assessment unavailable; retaining source for retry: %w", err)
 		case errors.Is(err, errMergeNotRelevant) && !item.CorroborationOnly:
@@ -260,7 +291,9 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 
 	// Extract IOCs, TTPs, and other threat data from narrative sources.
 	var extraction *ExtractionResult
-	if item.SigmaRule == nil {
+	if mergeExtraction != nil {
+		extraction = cloneExtraction(mergeExtraction)
+	} else if item.SigmaRule == nil {
 		var extractErr error
 		extraction, extractErr = p.extractor.Extract(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "extraction"}), item)
 		if extractErr != nil {
@@ -372,6 +405,9 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			if err := p.mergeIntoDraft(ctx, e.DraftID, extraction, item); err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return ctxErr
+				}
+				if errors.Is(err, errMergeReviewRequired) {
+					return nil
 				}
 				if errors.Is(err, errMergeRelevanceUnavailable) {
 					return fmt.Errorf("update merge assessment unavailable; retaining source for retry: %w", err)

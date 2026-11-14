@@ -1,15 +1,18 @@
 package publisher
 
 import (
+	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/craftedsignal/threat-bot/internal/pipeline"
 	"gopkg.in/yaml.v3"
 )
 
 func TestPublicationQualityCannotBeBypassedByStoredBriefRender(t *testing.T) {
-	b := BundleBrief{ID: "brief-optimole", Slug: "2026-11-optimole", Title: "Optimole (CVE-2026-124969)", Summary: "Optimole permits file deletion with administrator interaction.", Content: "Optimole versions up to, and including, 4.2.19 allow file deletion when PEAR Archive_Tar is loadable and an administrator uses Rename.", Severity: "high", PublishedAt: "2026-11-14T06:23:40Z", AffectedVendors: []string{"Optimole"}, AffectedProducts: []string{"Optimole"}, References: []string{"https://nvd.nist.gov/vuln/detail/CVE-2026-124969"}}
+	b := BundleBrief{ID: "brief-fixture", Slug: "2099-01-fixturemedia", Title: "FixtureMedia (CVE-2099-11111)", Summary: "A fictional helper requires an administrator response.", Content: "FixtureMedia versions up to 4.2.19 require administrator review. This fictional source names no mitigation.", Severity: "high", PublishedAt: "2099-01-01T00:00:00Z", AffectedVendors: []string{"FixtureMedia"}, AffectedProducts: []string{"FixtureMedia"}, References: []string{"https://example.com/fixture-advisory"}}
 	for _, route := range []string{"publish", "backfill"} {
 		t.Run(route, func(t *testing.T) {
 			var err error
@@ -71,5 +74,44 @@ func TestPublicProductProjectionPreservesLongNameRangeSyntax(t *testing.T) {
 		if len(got) != 1 || got[0].Range != tc.want {
 			t.Fatalf("lost %q scope: %+v", tc.suffix, got)
 		}
+	}
+}
+
+func TestPublicationQualityPreservesSharedResponseSemantics(t *testing.T) {
+	raw, err := os.ReadFile("../eval/testdata/brief_quality/valid-notice.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, content, wantIssue string
+	}{
+		{"response first", "## Recommendation\nUpgrade affected Widget installations to version 1.0.12.\n\n## Overview\nA fictional widget requires an administrator response.", ""},
+		{"use patched release", "## Overview\nA fictional widget requires an administrator response.\n\n## Recommendation\nUse the patched Widget release 1.0.12 or later.", ""},
+		{"noun patch", "## Overview\nA fictional widget requires an administrator response.\n\n## Recommendation\nVerify current usage of Widget. No patch is currently available.", "recommendation"},
+		{"noun update", "## Overview\nA fictional widget requires an administrator response.\n\n## Recommendation\nVerify current usage of Widget. Security update information is not provided by the source.", "recommendation"},
+		{"numeric score", "## Overview\nA fictional widget requires an administrator response.\n\n## Impact\n8.8\n\n## Recommendation\nUpgrade Widget to version 1.0.12.", "impact"},
+		{"attributed score", "## Overview\nA fictional widget requires an administrator response.\n\n## Impact\nAccording to NVD, the CVSS v3.1 base score is 8.8 (HIGH).\n\n## Recommendation\nUpgrade Widget to version 1.0.12.", "impact"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var doc map[string]any
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			doc["content"] = tc.content
+			data, err := yaml.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			internal := pipeline.ValidatePublicationConsistency(string(data))
+			p := &Publisher{logger: slog.Default()}
+			final := p.ValidatePublication(string(data))
+			if tc.wantIssue == "" {
+				if len(internal) != 0 || final != nil {
+					t.Fatalf("valid brief rejected: internal=%v, final=%v", internal, final)
+				}
+			} else if !strings.Contains(strings.Join(internal, "; "), tc.wantIssue) || final == nil || !strings.Contains(final.Error(), tc.wantIssue) {
+				t.Fatalf("expected %s on both routes: internal=%v, final=%v", tc.wantIssue, internal, final)
+			}
+		})
 	}
 }

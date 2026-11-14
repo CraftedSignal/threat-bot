@@ -25,6 +25,8 @@ The publisher constructs a complete release of related feed artifacts and uses a
 
 The shared public packages live in this module so a single checkout builds. Their [provenance](../pkg/PROVENANCE.md) records imported source and transformations. Future feed consumers should reuse these packages rather than fork validator behavior. Public placement does not imply a v1 API stability promise.
 
+`pkg/publicfeed` owns the deterministic narrative and action-plan readiness contract used by pipeline review and public-feed validation. Model-assisted evidence assessment remains in the pipeline. Keeping these checks separate prevents a structurally valid but incomplete brief from bypassing the final publication gate.
+
 ## Boundaries
 
 Fetched text and model output are untrusted data. Structural validity does not establish truth, and grounding checks cannot guarantee correctness. The public Markdown field filter is separate from the bundle wrapper and STIX exporter. Each output surface needs its own disclosure review. See [security model](security-model.md), [feed protocol](feed-protocol.md), and the reviewed [decisions](adr/README.md).

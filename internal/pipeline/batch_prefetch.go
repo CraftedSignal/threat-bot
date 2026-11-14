@@ -54,7 +54,7 @@ func (p *Pipeline) prefetchItems(ctx context.Context, items []scraper.RawItem) {
 			continue
 		}
 		for _, enrichmentErr := range p.enricher.Enrich(ctx, item) {
-			p.logger.Warn("vendor advisory enrichment failed; continuing with available evidence", "source_id", item.SourceID, "source", item.Source, "error", enrichmentErr)
+			p.logger.Warn("source enrichment unavailable; continuing with available evidence", "source_id", item.SourceID, "source", item.Source, "error", enrichmentErr)
 		}
 		decision, _, _ := p.dedup.checkPreExtraction(*item, false)
 		if decision == DedupNew && item.CorroborationOnly {

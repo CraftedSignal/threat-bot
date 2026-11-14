@@ -93,8 +93,14 @@ func (e *ContentEnricher) Enrich(ctx context.Context, item *scraper.RawItem) []e
 	if err != nil {
 		return []error{fmt.Errorf("fetching source article: %w", err)}
 	}
-	if strings.TrimSpace(text) == "" || (!required && len(text) < len(item.Content)) {
+	if strings.TrimSpace(text) == "" {
 		return []error{fmt.Errorf("source article refresh did not return complete text")}
+	}
+	// Optional enrichment can legitimately yield less evidence than the feed
+	// already supplies. Preserve the richer input without reporting a successful
+	// fetch as an outage. Required refreshes still append their evidence.
+	if !required && len(text) < len(item.Content) {
+		return nil
 	}
 	item.NeedsFullArticle = false
 

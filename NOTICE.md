@@ -10,7 +10,7 @@ This notice is an inventory and attribution index, not a legal determination for
 
 | Material | Attribution and scope |
 | --- | --- |
-| Shared IOC, MITRE, public-feed packages | [Package provenance](pkg/PROVENANCE.md) records source revision, hashes, and transformations. The pinned upstream tree includes the AGPL version 3 license text; the original attribution and license are retained. |
+| Shared IOC, MITRE, public-feed packages | [Package provenance](pkg/PROVENANCE.md) records the original source revision/import hashes and subsequent first-party adaptations separately. The pinned upstream tree includes the AGPL version 3 license text; the original attribution and license are retained. |
 | Synthetic evaluation corpora | Original fictional extraction and publication-contract fixtures under the project license; [extraction notice](internal/eval/testdata/NOTICE), [publication-contract notice](internal/eval/testdata/brief_quality/NOTICE), and [provenance](internal/eval/testdata/provenance.json). Captured production drafts and third-party incident records are excluded. |
 | Previously imported TRAM corpus | Full report excerpts have been removed. Upstream Apache-2.0 [license](LICENSES/Apache-2.0.txt) and [NOTICE](internal/eval/testdata/TRAM-NOTICE.txt) are retained for historical provenance at commit `f29793d8d665f7f552898696e00065ef24a29a20`. |
 | MITRE ATT&CK identifiers and lookup metadata | MITRE ATT&CK attribution and terms in [LICENSES/MITRE-ATTACK.md](LICENSES/MITRE-ATTACK.md). ATT&CK is a registered trademark of The MITRE Corporation. |

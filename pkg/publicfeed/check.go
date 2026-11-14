@@ -63,6 +63,8 @@ func sorted(issues []Issue) []Issue {
 
 type briefDocument struct {
 	Title                string                 `yaml:"title"`
+	Description          string                 `yaml:"description"`
+	ActionPlan           map[string]any         `yaml:"action_plan"`
 	Slug                 string                 `yaml:"slug"`
 	BriefID              string                 `yaml:"brief_id"`
 	EventID              string                 `yaml:"event_id"`
@@ -194,6 +196,9 @@ func CheckBriefWithMode(path string, data []byte, mode Mode) []Issue {
 	visibleBody := inlineCodePattern.ReplaceAllString(fencedCodePattern.ReplaceAllString(string(body), ""), "")
 	if activeHTMLPattern.MatchString(visibleBody) {
 		issues = append(issues, issue(path, "body", "brief.active_html", "active raw HTML is not allowed in public brief content"))
+	}
+	for _, message := range ContentQualityIssues(ContentQualityInput{Summary: brief.Description, Content: string(body), HasCVE: len(brief.CVEs) > 0 || cvePattern.MatchString(brief.Title+"\n"+brief.Description+"\n"+string(body)), ActionPlan: brief.ActionPlan}) {
+		issues = append(issues, issue(path, "body", "brief.quality", message))
 	}
 	return sorted(issues)
 }

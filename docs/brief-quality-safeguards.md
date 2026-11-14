@@ -21,6 +21,8 @@ All publication routes apply the same final semantic contract to the normalized
 snapshot. Summary-only bodies, empty operational guidance, marketplace product
 slogans, invalid detection coverage and blocking QA findings require review.
 Canonical product names remain separate from affected-version qualifiers.
+The deterministic narrative and action-plan checks live in `pkg/publicfeed` so
+pipeline decisions and public-feed validation use the same readiness contract.
 
 Source-derived version scopes require product-specific attribution. Ambiguous
 branches and dependency ranges are not copied to another product. Repair-rejected
@@ -63,6 +65,18 @@ Conflicting corrections are held with both the canonical draft reference and
 candidate evidence; repeating an unchanged editorial hold makes no model calls.
 A richer source rebuilds a thin brief through full assembly and grounding before
 updating its canonical narrative.
+
+A completed negative merge-claims verdict also creates an editorial hold, retaining
+the selected extraction and target identity without marking the source seen or
+changing the canonical draft, indexes or publication state. An unchanged hold
+does not repeat model calls or warning logs after restart. Evidence, processing
+policy or meaningful target identity/narrative/accepted-claim/status changes allow
+reassessment. Polling timestamps, publication bookkeeping and YAML formatting do
+not. Assessment failures keep their error, saved extraction and durable backoff;
+the configured attempt limit moves exhausted work to review. Recovery is automatic
+when those semantic inputs change. Quarantine visibility and held history commit
+together. A resumed held checkpoint can repair an earlier storage failure without
+repeating the assessment or consuming another attempt.
 
 Checkpoint storage looks up the current candidate by source ID and returns its
 stored input key. The pipeline owns policy and evidence compatibility: a delivery

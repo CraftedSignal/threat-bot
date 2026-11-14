@@ -42,6 +42,10 @@ Read the exact version's release notes, back up state, validate the new configur
 
 For publishing failures, retain the database/outbox and inspect the configured branch and credential permissions. Restarting allows durable publication retry. Use `bundle drift` and the previewed correction commands to reconcile artifacts; do not reset source state or rewrite IDs as a generic repair.
 
+A completed negative merge assessment retains the source and its selected extraction as an editorial hold. It leaves the canonical draft and publication state unchanged. Identical evidence, processing policy and semantic target do not repeat model calls or warning logs, including after restart. Review the evidence and related draft before making a correction. Changed evidence or policy, or a meaningful change to the target's identity, narrative, accepted claims or status, permits reassessment; polling timestamps and publication bookkeeping alone do not.
+
+Assessment failures retain their error, saved extraction and retry deadline. Retries use the configured grounding backoff and attempt limit; reaching the limit retains the work for review. Preserve this state during recovery instead of repeatedly deleting checkpoints or replaying unchanged inputs to force another paid attempt. See [brief safeguards](brief-quality-safeguards.md) for the evidence and retry boundaries.
+
 A restore drill should show that an existing draft and pending publication state survive restart without sending anything to the production feed. Production rollout and restore approval are separate from building or releasing the application. See [commands](commands.md), [security model](security-model.md), and [releases](releases.md).
 
 ## Rename compatibility

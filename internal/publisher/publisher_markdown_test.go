@@ -726,8 +726,8 @@ func TestStripLeadingHeadings(t *testing.T) {
 		{"empty", "", ""},
 		{"plain", "Hello world.", "Hello world."},
 		{"skip-h1", "# Title\n\nFirst para.", "First para."},
-		{"skip-h1-h2", "# Title\n\n## Section\n\nBody.", "Body."},
-		{"only-headings", "# A\n## B", ""},
+		{"keeps-h2", "# Title\n\n## Section\n\nBody.", "## Section\n\nBody."},
+		{"only-headings", "# A\n## B", "## B"},
 		{"keeps-mid-headings", "Intro.\n\n## Mid heading\n\nMore.", "Intro.\n\n## Mid heading\n\nMore."},
 		{"keeps-multi-paragraphs", "Para 1.\n\nPara 2.\n\nPara 3.", "Para 1.\n\nPara 2.\n\nPara 3."},
 	}

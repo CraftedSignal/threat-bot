@@ -48,6 +48,9 @@ revision_history:
 ---
 
 CVE-2026-1234 is being exploited. No active HTML is present.
+
+## Recommendation
+Consult the cited advisory for remediation.
 `
 
 func issueCodes(issues []Issue) string {

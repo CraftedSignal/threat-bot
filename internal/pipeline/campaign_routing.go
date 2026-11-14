@@ -96,6 +96,9 @@ func (p *Pipeline) routeToCampaign(ctx context.Context, item scraper.RawItem, ex
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeReviewRequired) {
+					return true
+				}
 				if errors.Is(err, errMergeRelevanceUnavailable) {
 					p.logger.Warn("campaign merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", e.DraftID, "error", err)
 					return true

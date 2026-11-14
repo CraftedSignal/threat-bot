@@ -212,7 +212,6 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	return nil
 }
 
-// mergeIntoDraft folds an item into an existing draft and counts the merge.
 // logMergeFailure logs a failed merge. A merge the relevance check refused is
 // a correct decision that the item is a separate story, not a failure, so it
 // is logged at INFO; anything else is a real failure and stays at WARN.
@@ -227,17 +226,6 @@ func (p *Pipeline) logMergeFailure(msg string, err error, args ...any) {
 		return
 	}
 	p.logger.Warn(msg, args...)
-}
-
-func (p *Pipeline) mergeIntoDraft(ctx context.Context, draftID string, extraction *ExtractionResult, item scraper.RawItem) error {
-	if err := p.unionIntoDraft(ctx, draftID, extraction, item); err != nil {
-		if errors.Is(err, errMergeNotRelevant) || errors.Is(err, errNonAuthoritativeRoundupSource) || errors.Is(err, errMergeRelevanceUnavailable) {
-			return err
-		}
-		return fmt.Errorf("%w: %w", errMergeRelevanceUnavailable, err)
-	}
-	p.decisions.record(outcomeMerged)
-	return nil
 }
 
 // unionIntoDraft unions structured fields from a new extraction into
@@ -340,7 +328,7 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 		return fmt.Errorf("%w: incoming claims could not be verified: %w", errMergeRelevanceUnavailable, err)
 	}
 	if !delta.Grounded {
-		return fmt.Errorf("%w: incoming claims unsupported: %s", errMergeRelevanceUnavailable, strings.Join(delta.Issues, "; "))
+		return &MergeClaimsRejectedError{Issues: append([]string(nil), delta.Issues...), Extraction: cloneExtraction(extraction)}
 	}
 	pre := snapshotBriefSignals(fm)
 	lifecycleChanged := mergeRumourLifecycle(fm, extraction)

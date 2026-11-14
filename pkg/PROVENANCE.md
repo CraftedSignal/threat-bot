@@ -9,7 +9,10 @@ migration review across producer and consumer.
 
 The implementation and tests were copied from the committed CraftedSignal
 threat-feed tree at `8805c49b470aec2f2e214d3d5add49f0828dcb28`.
-`provenance.json` records original and imported hashes. The public-feed wrapper
+`provenance.json` records original and imported hashes. Intentional later changes
+have separate adapted hashes; new first-party package files have their own local
+inventory. The original import and upstream license identities remain intact.
+The public-feed wrapper
 was replaced by its real implementation, moved from `internal/publicfeed`;
 its MITRE import now names this module. No sibling checkout, alternate module
 replacement or duplicated validator is required. The upstream lookup table
@@ -25,3 +28,9 @@ Only the brief contract and its required helpers are imported here. The feed's
 unused STIX/sitemap site validators assumed a particular deployment hostname;
 they are intentionally outside this package. The existing publisher owns
 Threat Bot's configurable STIX export and validation.
+
+The shared public-feed contract also owns deterministic narrative and action-plan
+readiness checks used by the pipeline and publisher. These first-party adaptations
+are recorded separately from the original feed import. Their tests use authored
+fictional inputs; captured production briefs are excluded. Structural/editorial
+readiness does not establish that an intelligence claim is true.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/craftedsignal/threat-bot/internal/llm"
 	"github.com/craftedsignal/threat-bot/internal/scraper"
 )
 
@@ -126,7 +127,7 @@ func (p *Pipeline) assessDraftMergeRelevance(ctx context.Context, fm map[string]
 	)
 
 	var resp mergeRelevanceLLMResponse
-	err = p.llmClient.GenerateJSON(ctx, prompt, mergeRelevanceSystemPrompt, &resp)
+	err = p.llmClient.GenerateJSON(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_relevance"}), prompt, mergeRelevanceSystemPrompt, &resp)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, mergeRelevanceDecision{}, ctxErr
 	}
@@ -202,7 +203,7 @@ func (p *Pipeline) filterRoundupContentExtraction(ctx context.Context, vendor st
 	)
 
 	var resp roundupContentRelevanceResponse
-	err := p.llmClient.GenerateJSON(ctx, prompt, roundupContentRelevanceSystemPrompt, &resp)
+	err := p.llmClient.GenerateJSON(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "roundup_relevance"}), prompt, roundupContentRelevanceSystemPrompt, &resp)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}

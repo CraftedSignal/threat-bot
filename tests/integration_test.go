@@ -217,7 +217,7 @@ func TestIntegrationEndToEnd(t *testing.T) {
 }
 
 func TestIntegrationCrossSourceDedup(t *testing.T) {
-	// Mock LLM server — same as main integration test.
+	// Script extraction, generation and explicit relevance approval for this CVE.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var reqBody struct {
 			Prompt string          `json:"prompt"`
@@ -230,6 +230,8 @@ func TestIntegrationCrossSourceDedup(t *testing.T) {
 		if isJSONFormat(reqBody.Format) {
 			if strings.Contains(reqBody.System, "fact-checking") || strings.Contains(reqBody.System, "grounding") {
 				response = `{"issues": []}`
+			} else if strings.HasPrefix(reqBody.System, "You are a threat intelligence editor deciding whether fields extracted from a new source belong in an existing threat brief.") {
+				response = `{"merge":true,"reference_relevant":true,"poc_relevant":true,"cves":["CVE-2026-5555"],"affected_vendors":[],"affected_products":[],"affected_os":[],"iocs":[],"reason":"same CVE and public exploit report"}`
 			} else if strings.Contains(reqBody.System, "Score each item") || strings.Contains(reqBody.System, "threat intelligence analyst evaluating") {
 				response = `{"credibility": 4.5, "actionability": 4.0, "novelty": 4.5, "summary": "High-quality advisory"}`
 			} else {
@@ -238,7 +240,8 @@ func TestIntegrationCrossSourceDedup(t *testing.T) {
 		} else {
 			response = structuredBriefJSON(map[string]any{
 				"id": "brief-dedup-test", "slug": "dedup-test-brief", "title": "Dedup Test Brief",
-				"summary": "Testing cross-source dedup", "content": "## Overview\nCross-source dedup test.\n", "severity": "high",
+				"summary": "A remote code execution vulnerability affects Example Server.", "content": "## Overview\nCVE-2026-5555 permits remote code execution in Example Server.\n\n## Recommendation\nInventory exposed Example Server instances and follow the cited vendor remediation guidance. Review process creation telemetry for the reported executable.\n", "severity": "high",
+				"affected_vendors": []any{"Example"}, "affected_products": []any{"Example Server"},
 				"tags": []any{"test"},
 				"rules": []any{map[string]any{
 					"title": "Test Rule", "description": "Detects malware.exe",
@@ -285,7 +288,7 @@ func TestIntegrationCrossSourceDedup(t *testing.T) {
 		Source:      "reddit",
 		Title:       "New Critical RCE CVE-2026-5555",
 		URL:         "https://reddit.com/r/netsec/example",
-		Content:     "CVE-2026-5555 is a critical RCE vulnerability in Example Server v3.1. Remote attackers can execute arbitrary code via crafted HTTP requests.",
+		Content:     "CVE-2026-5555 is a critical RCE vulnerability in Example Server v3.1. Remote attackers can execute arbitrary code via crafted HTTP requests. Observed C2 domain malware-c2.badactor.xyz.",
 		PublishedAt: time.Now(),
 		Metadata:    map[string]string{"cve": "CVE-2026-5555"},
 	}

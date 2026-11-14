@@ -1,0 +1,26 @@
+{
+  "id": "brief-corpus-widget",
+  "slug": "2026-11-corpus-widget",
+  "summary": "Widget 2.1 permits arbitrary file deletion with administrator interaction.",
+  "severity": "high",
+  "published_at": "2026-11-14T06:00:00Z",
+  "content": "## Overview\nWidget 2.1 permits arbitrary file deletion when an administrator renames an attachment. A fixed release is not specified.\n\n## Recommendation\nInventory Widget installations and consult the vendor advisory for remediation; do not infer a fixed release from the affected version.",
+  "affected_vendors": [
+    "WidgetCo"
+  ],
+  "affected_products": [
+    "Widget (2.1)"
+  ],
+  "cves": [
+    {
+      "id": "CVE-2026-4242",
+      "kev_status": "unknown"
+    }
+  ],
+  "references": [
+    "https://vendor.example/widget/advisory"
+  ],
+  "exploitation_evidence": {
+    "status": "unknown"
+  }
+}

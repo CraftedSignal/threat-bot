@@ -62,13 +62,14 @@ type LLMBatchConfig struct {
 }
 
 type LLMConfig struct {
-	Batch     LLMBatchConfig `yaml:"batch"`
-	Provider  string         `yaml:"provider"` // explicitly "ollama" or "vertexai"
-	Endpoint  string         `yaml:"endpoint"`
-	Model     string         `yaml:"model"`
-	FastModel string         `yaml:"fast_model"` // smaller model for quality gate (defaults to Model)
-	Project   string         `yaml:"project"`    // GCP project ID (Vertex AI only)
-	Location  string         `yaml:"location"`   // GCP region (Vertex AI only)
+	Batch       LLMBatchConfig `yaml:"batch"`
+	Provider    string         `yaml:"provider"` // explicitly "ollama" or "vertexai"
+	Endpoint    string         `yaml:"endpoint"`
+	Model       string         `yaml:"model"`
+	RepairModel string         `yaml:"repair_model"` // optional targeted grounding repair model
+	FastModel   string         `yaml:"fast_model"`   // smaller model for quality gate (defaults to Model)
+	Project     string         `yaml:"project"`      // GCP project ID (Vertex AI only)
+	Location    string         `yaml:"location"`     // GCP region (Vertex AI only)
 }
 
 type GitHubConfig struct {
@@ -275,6 +276,7 @@ type PipelineConfig struct {
 	QualityThreshold float64 `yaml:"quality_threshold"`
 	// MaxGroundingAttempts quarantines an item whose brief still fails the
 	// grounding check after this many passes. Zero means the default (5).
+	RetryBackoff           time.Duration            `yaml:"retry_backoff"` // default 15m between failed candidate retries
 	MaxGroundingAttempts   int                      `yaml:"max_grounding_attempts"`
 	InitialLookback        time.Duration            `yaml:"initial_lookback"`
 	SourceConfidence       map[string]float64       `yaml:"source_confidence"`        // per-source confidence multiplier (0.0-1.0)
@@ -318,15 +320,17 @@ func Load(path string) (*Config, error) {
 		cfg.Publish.AuthorEmail = "threat-bot@users.noreply.github.com"
 	}
 
+	// Recovery remains available when new batch submission is disabled.
+	if cfg.LLM.Batch.PollInterval == 0 {
+		cfg.LLM.Batch.PollInterval = 30 * time.Second
+	}
+	if cfg.LLM.Batch.MaxWait == 0 {
+		cfg.LLM.Batch.MaxWait = 15 * time.Minute
+	}
+
 	if cfg.LLM.Batch.Enabled {
 		if cfg.LLM.Provider != "vertexai" || cfg.LLM.Batch.Bucket == "" {
 			return nil, fmt.Errorf("LLM batch requires vertexai provider and a bucket")
-		}
-		if cfg.LLM.Batch.PollInterval == 0 {
-			cfg.LLM.Batch.PollInterval = 30 * time.Second
-		}
-		if cfg.LLM.Batch.MaxWait == 0 {
-			cfg.LLM.Batch.MaxWait = 15 * time.Minute
 		}
 		if cfg.LLM.Batch.MinPrompts == 0 {
 			cfg.LLM.Batch.MinPrompts = 5

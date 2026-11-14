@@ -810,7 +810,7 @@ func (v *BriefValidator) Validate(rawYAML string) (string, []string, error) {
 	// Clean affected vendor/product/OS lists: trim, drop placeholders/empties,
 	// dedupe case-insensitively.
 	brief.AffectedVendors = CleanAffectedList(brief.AffectedVendors)
-	brief.AffectedProducts = CleanAffectedList(brief.AffectedProducts)
+	brief.AffectedProducts = CleanProductList(brief.AffectedProducts)
 	brief.AffectedOS = CleanAffectedList(brief.AffectedOS)
 	brief.CPEs = CleanCPEList(brief.CPEs)
 

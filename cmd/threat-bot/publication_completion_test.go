@@ -144,7 +144,7 @@ func TestCommittedDraftCompletionRetriesPartialDatabaseFailure(t *testing.T) {
 	}
 }
 
-func TestIdlePollRetriesQueuedPublicationWithoutPipelineWork(t *testing.T) {
+func TestIdlePollRecoversIntentsAndRetriesQueuedPublication(t *testing.T) {
 	db, _ := publicationStateDB(t)
 	defer db.Close()
 	processed, flushes := 0, 0
@@ -180,13 +180,13 @@ func TestIdlePollRetriesQueuedPublicationWithoutPipelineWork(t *testing.T) {
 	if draft.Status != storage.StatusApproved || claim.Status != "published" {
 		t.Fatal("idle retry did not finish committed publication")
 	}
-	if processed != 0 || flushes != 2 {
+	if processed != 2 || flushes != 2 {
 		t.Fatalf("idle work processed=%d flushes=%d", processed, flushes)
 	}
 	if err := processPolledItems(context.Background(), []scraper.RawItem{{SourceID: "new-item"}}, process, flush); err != nil {
 		t.Fatal(err)
 	}
-	if processed != 1 || flushes != 2 {
+	if processed != 3 || flushes != 2 {
 		t.Fatal("new-item batch gained an extra flush")
 	}
 	if err := processPolledItems(context.Background(), nil, process, nil); err != nil {
@@ -246,7 +246,7 @@ func TestServicePublisherDropsRejectedQueuedDraftBeforeGit(t *testing.T) {
 	defer db.Close()
 	pub := newServicePublisher(&config.Config{}, func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, db)
 	pub.UseSegmented = true
-	if err := pub.PublishDraft("id: brief-one\nslug: 2026-11-one\ntitle: One\nsummary: Summary\nseverity: high\npublished_at: 2026-11-13T12:00:00Z\n", "draft-one", "claim-one"); err != nil {
+	if err := pub.PublishDraft("id: brief-one\nslug: 2026-11-one\ntitle: One\nsummary: Summary\ncontent: A security notice records suspicious host activity for analyst review.\nseverity: high\npublished_at: 2026-11-13T12:00:00Z\n", "draft-one", "claim-one"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpdateDraftStatus("draft-one", storage.StatusRejected, "manual review"); err != nil {

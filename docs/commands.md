@@ -8,6 +8,7 @@ An apparently read-only database command can open/create SQLite or apply schema 
 | --- | --- |
 | `config validate [--command SCOPE]` | Offline configuration validation; no DB or network. |
 | `check-llm` | Real provider/model smoke request; may incur inference cost. |
+| `efficiency [--since 24h]` | Reports local processing counts and durable batch references; no inference or remote lookup. |
 | `run` | Polls sources, enrichment, and models; writes state; publishes when configured and enabled. |
 | `drafts list [--status pending|approved|rejected]` | Lists local drafts; defaults to pending. |
 | `drafts show ID` | Shows local draft and validation metadata. |
@@ -23,6 +24,8 @@ An apparently read-only database command can open/create SQLite or apply schema 
 | `canonicalize-products --content-dir DIR [--apply]` | Previews local Markdown taxonomy changes; `--apply` writes files. |
 
 ## Reviewed corrections
+
+`efficiency --keys KEY1,KEY2 --expected-ref REF --reconcile-job JOB` reconciles explicitly selected durable batch requests with a Vertex job after checking remote ownership. It requires Vertex provider/model/project/location and the batch bucket; it contacts Google and updates SQLite. Use the exact keys and observed reference from the report. `--abandon` replaces `--reconcile-job` to retain an unknown-work tombstone locally; it does not authorize another paid inference. Invalid recovery flags fail before the database opens. Keep a backup before either recovery operation.
 
 Preview an amendment to an approved draft:
 

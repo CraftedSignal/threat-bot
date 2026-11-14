@@ -55,8 +55,12 @@ func draftMayPublish(db draftPublicationStore, draft publisher.DraftPublication)
 }
 
 func processPolledItems(ctx context.Context, items []scraper.RawItem, process func(context.Context, []scraper.RawItem) error, flush func() error) error {
+	// Idle cycles also recover durable publication intents.
+	if err := process(ctx, items); err != nil {
+		return err
+	}
 	if len(items) > 0 {
-		return process(ctx, items)
+		return nil
 	}
 	if flush != nil {
 		if err := flush(); err != nil {

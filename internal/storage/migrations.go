@@ -9,6 +9,9 @@ import (
 )
 
 func migrate(db *sql.DB) error {
+	if err := migrateProcessingState(db); err != nil {
+		return err
+	}
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS seen_items (
 			source_id   TEXT PRIMARY KEY,
@@ -287,6 +290,11 @@ func migrate(db *sql.DB) error {
 			brief_yaml  TEXT NOT NULL
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_content_index_source_id ON content_index(source_id); CREATE INDEX IF NOT EXISTS idx_llm_cache_created_at ON llm_cache(created_at); CREATE INDEX IF NOT EXISTS idx_processing_history_created_at ON processing_history(created_at);`)
 	if err != nil {
 		return err
 	}

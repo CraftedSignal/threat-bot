@@ -685,3 +685,99 @@ func mustOpenTestDB(t *testing.T) *storage.DB {
 	}
 	return db
 }
+
+func TestDedupIncompleteCVEAcceptsRicherSource(t *testing.T) {
+	base := "id: brief-widget\nslug: widget\ntitle: Widget CVE-2026-9999\nsummary: Widget permits file deletion.\nseverity: high\npublished_at: \"2026-11-14T00:00:00Z\"\ncves: [CVE-2026-9999]\naffected_products: [Widget]\n"
+	complete := "content: |\n  An administrator can trigger file deletion through Widget's rename operation.\n\n  ## Recommendation\n  Inventory affected Widget installations and consult the vendor advisory for remediation.\n"
+	for _, tc := range []struct {
+		name, body string
+		want       DedupDecision
+	}{
+		{"complete", complete, DedupSkip},
+		{"missing body", "", DedupMerge},
+		{"registry paragraph without response", "content: An administrator can trigger file deletion through Widget's rename operation.\n", DedupMerge},
+		{"QA veto", complete + "qa_status: {verdict: do_not_publish}\n", DedupMerge},
+		{"TTP without detector or hunt", complete + "ttps: [{technique_id: T1190}]\n", DedupMerge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			if err := db.CreateDraft(&storage.Draft{ID: "prior", Status: storage.StatusApproved, BriefYAML: base + tc.body, CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.IndexContent(&storage.ContentIndexEntry{CVEID: "CVE-2026-9999", DraftID: "prior", SourceID: "nvd:prior", Source: "nvd", CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			d := NewDeduplicator(db, slog.Default())
+			item := scraper.RawItem{SourceID: "research:richer", Source: "research", Title: "Widget CVE-2026-9999", Content: "The research details administrator prerequisites, the rename path, and telemetry defenders can collect."}
+			if got, _, _ := d.CheckPreExtraction(item); got != tc.want {
+				t.Errorf("pre-extraction decision=%v, want %v", got, tc.want)
+			}
+			if got, _ := d.CheckPostExtraction(item, &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"Widget"}}); got != tc.want {
+				t.Errorf("post-extraction decision=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDedupChangedSourceRevisionTargetsExistingDraft(t *testing.T) {
+	for _, tc := range []struct {
+		name, revision, baseline string
+		changedIdentity          bool
+		want                     DedupDecision
+	}{
+		{name: "changed revision", baseline: "old", revision: "new", want: DedupMerge},
+		{name: "changed subject and URL", baseline: "old", revision: "new", changedIdentity: true, want: DedupMerge},
+		{name: "unchanged revision", baseline: "old", revision: "old", want: DedupSkip},
+		{name: "no prior seen baseline", revision: "new", want: DedupSkip},
+		{name: "legacy seen baseline", baseline: "legacy", revision: "new", want: DedupSkip},
+		{name: "no incoming revision", baseline: "old", want: DedupSkip},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			const sourceID = "nvd:CVE-2026-4242"
+			const body = "id: brief-widget\nslug: widget\ntitle: Widget CVE-2026-4242\nsummary: Widget permits file deletion.\nseverity: high\npublished_at: \"2026-11-14T00:00:00Z\"\ncves: [CVE-2026-4242]\naffected_products: [Widget]\ncontent: |\n  Widget permits file deletion through attachment renaming.\n\n  ## Recommendation\n  Inventory affected Widget installations and consult the vendor advisory for remediation.\nreferences: [https://vendor.example/original]\n"
+			if err := db.CreateDraft(&storage.Draft{ID: "prior", Status: storage.StatusApproved, BriefYAML: body, CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.IndexContent(&storage.ContentIndexEntry{CVEID: "CVE-2026-4242", DraftID: "prior", SourceID: sourceID, Source: "nvd", TitleHash: NormalizeTitleHash("Widget CVE-2026-4242"), SourceURLHash: SourceURLHashes("https://vendor.example/original")[0], CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.baseline == "legacy" {
+				if err := db.MarkSeen(sourceID, "nvd", "Widget"); err != nil {
+					t.Fatal(err)
+				}
+			} else if tc.baseline != "" {
+				if err := db.MarkSeenRevision(sourceID, "nvd", "Widget", tc.baseline); err != nil {
+					t.Fatal(err)
+				}
+			}
+			item := scraper.RawItem{SourceID: sourceID, Source: "nvd", Revision: tc.revision, URL: "https://vendor.example/original", Title: "Widget CVE-2026-4242", Content: "Corrected vendor scope and administrator prerequisites."}
+			extraction := &ExtractionResult{CVEs: []string{"CVE-2026-4242"}, AffectedProducts: []string{"Widget"}}
+			if tc.changedIdentity {
+				item.URL, item.Title = "https://vendor.example/corrected", "Corrected attachment deletion notice"
+				extraction.CVEs = nil
+			}
+			d := NewDeduplicator(db, slog.Default())
+			pre, _, entries := d.CheckPreExtraction(item)
+			if pre != tc.want || len(entries) != 1 || entries[0].DraftID != "prior" {
+				t.Errorf("pre=%v targets=%+v, want %v into prior", pre, entries, tc.want)
+			}
+			post, entries := d.CheckPostExtraction(item, extraction)
+			if post != tc.want || len(entries) != 1 || entries[0].DraftID != "prior" {
+				t.Errorf("post=%v targets=%+v, want %v into prior", post, entries, tc.want)
+			}
+			stored, err := db.GetDraft("prior")
+			if err != nil || stored == nil || stored.BriefYAML != body {
+				t.Fatalf("routing changed existing draft: %+v %v", stored, err)
+			}
+			if tc.want == DedupMerge {
+				seen, err := db.HasSeenRevision(sourceID, tc.revision)
+				if err != nil || seen {
+					t.Fatalf("routing consumed unprocessed revision: seen=%v err=%v", seen, err)
+				}
+			}
+		})
+	}
+}

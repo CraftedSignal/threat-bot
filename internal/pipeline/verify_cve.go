@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,14 @@ import (
 )
 
 // CVEMeta holds the full enriched metadata for a verified CVE.
+type CVEVerification struct {
+	Status    string    `json:"status" yaml:"status"`
+	Source    string    `json:"source" yaml:"source"`
+	CheckedAt time.Time `json:"checked_at" yaml:"checked_at"`
+}
+
 type CVEMeta struct {
+	Verification   CVEVerification
 	Exists         bool
 	CVSS           float64
 	CVSSVector     string
@@ -81,6 +89,8 @@ type nvdVulnerability struct {
 }
 
 type nvdCVEDetail struct {
+	ID               string           `json:"id"`
+	VulnStatus       string           `json:"vulnStatus"`
 	SourceIdentifier string           `json:"sourceIdentifier"`
 	Descriptions     []nvdDescription `json:"descriptions"`
 	Metrics          nvdMetrics       `json:"metrics"`
@@ -203,78 +213,45 @@ func (v *CVEVerifier) GetMeta(cveID string) *CVEMeta {
 	return v.cache[strings.ToUpper(cveID)]
 }
 
-// Verify parses the brief YAML, extracts CVE IDs, checks them against NVD,
-// removes invalid ones from IOCs, and returns the (possibly modified) YAML
-// along with validation notes.
+// Verify checks sorted identities against NVD and the CVE Program and records
+// every outcome in cve_verification. Absence and outages are not invalidity.
 func (v *CVEVerifier) Verify(ctx context.Context, briefStr string) (string, []string) {
-	cves := cveRe.FindAllString(briefStr, -1)
-	if len(cves) == 0 {
+	var doc map[string]any
+	if yaml.Unmarshal([]byte(briefStr), &doc) != nil || doc == nil {
 		return briefStr, nil
 	}
-
-	// Deduplicate.
-	unique := make(map[string]bool)
-	for _, cve := range cves {
-		unique[strings.ToUpper(cve)] = true
+	unique := map[string]bool{}
+	for _, id := range sourceCVEPattern.FindAllString(briefStr, -1) {
+		unique[strings.ToUpper(id)] = true
 	}
-
-	// Check each CVE against NVD.
-	invalid := make(map[string]bool)
+	if len(unique) == 0 {
+		return briefStr, nil
+	}
+	ids := make([]string, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	verification := map[string]CVEVerification{}
 	var notes []string
-	count := 0
-	for cve := range unique {
-		exists, err := v.checkCVE(ctx, cve)
-		if err != nil {
-			// NVD unreachable — skip verification gracefully.
-			continue
-		}
-		if !exists {
-			invalid[cve] = true
-			notes = append(notes, fmt.Sprintf("CVE %s not found in NVD — possible hallucination", cve))
-		}
-		count++
-		// Cap at 5 CVEs per brief to avoid blocking the pipeline.
-		if count >= 5 {
-			break
-		}
-	}
-
-	if len(invalid) == 0 {
-		return briefStr, notes
-	}
-
-	// Remove invalid CVEs from IOCs.
-	var brief briefYAML
-	if err := yaml.Unmarshal([]byte(briefStr), &brief); err != nil {
-		return briefStr, notes
-	}
-
-	modified := false
-	if len(brief.IOCs) > 0 {
-		var clean []briefIOC
-		for _, ioc := range brief.IOCs {
-			cveID := strings.ToUpper(strings.TrimSpace(ioc.Value))
-			if invalid[cveID] {
-				notes = append(notes, fmt.Sprintf("removed IOC with hallucinated CVE: %s", cveID))
-				modified = true
-				continue
-			}
-			clean = append(clean, ioc)
-		}
-		if modified {
-			if len(clean) == 0 {
-				brief.IOCs = nil
-			} else {
-				brief.IOCs = clean
+	for _, id := range ids {
+		_, err := v.checkCVE(ctx, id)
+		meta := v.GetMeta(id)
+		status := CVEVerification{Status: "unavailable", Source: "nvd+cve_program", CheckedAt: time.Now().UTC()}
+		if meta != nil {
+			status = meta.Verification
+			if status.Status == "" {
+				status.Status = "unavailable"
 			}
 		}
+		verification[id] = status
+		if status.Status != "verified" {
+			notes = append(notes, fmt.Sprintf("CVE %s verification %s via %s", id, status.Status, status.Source))
+		}
+		_ = err // Failure is persisted as explicit status, never confused with absence.
 	}
-
-	if !modified {
-		return briefStr, notes
-	}
-
-	out, err := yaml.Marshal(&brief)
+	doc["cve_verification"] = verification
+	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return briefStr, notes
 	}
@@ -283,7 +260,7 @@ func (v *CVEVerifier) Verify(ctx context.Context, briefStr string) (string, []st
 
 // checkCVE queries the NVD API for a single CVE ID, enriches with EPSS data,
 // caches the result, and returns whether the CVE exists.
-func (v *CVEVerifier) checkCVE(ctx context.Context, cveID string) (bool, error) {
+func (v *CVEVerifier) checkNVD(ctx context.Context, cveID string) (bool, error) {
 	v.mu.Lock()
 	if entry, cached := v.cache[cveID]; cached && time.Since(entry.CachedAt) < cveCacheTTL {
 		v.mu.Unlock()
@@ -329,7 +306,17 @@ func (v *CVEVerifier) checkCVE(ctx context.Context, cveID string) (bool, error) 
 	}
 
 	exists := len(nvdDetail.Vulnerabilities) > 0
+	if exists && (len(nvdDetail.Vulnerabilities) != 1 || !strings.EqualFold(nvdDetail.Vulnerabilities[0].CVE.ID, cveID)) {
+		return false, fmt.Errorf("NVD identity mismatch for %s", cveID)
+	}
+	if exists && strings.EqualFold(nvdDetail.Vulnerabilities[0].CVE.VulnStatus, "Rejected") {
+		v.cacheMeta(cveID, &CVEMeta{Verification: CVEVerification{Status: "rejected", Source: "nvd", CheckedAt: time.Now().UTC()}, CachedAt: time.Now()})
+		return false, nil
+	}
 	cvss, cvssVector := cvssScoreVectorFromNVD(&nvdDetail)
+	if cvss < 0 || cvss > 10 {
+		cvss, cvssVector = 0, ""
+	}
 	cpes := cpesFromNVD(&nvdDetail)
 	description := descriptionFromNVD(&nvdDetail)
 
@@ -344,6 +331,7 @@ func (v *CVEVerifier) checkCVE(ctx context.Context, cveID string) (bool, error) 
 
 	meta := &CVEMeta{
 		Exists:           exists,
+		Verification:     CVEVerification{Status: "verified", Source: "nvd", CheckedAt: time.Now().UTC()},
 		CVSS:             cvss,
 		CVSSVector:       cvssVector,
 		EPSS:             epss,
@@ -354,6 +342,111 @@ func (v *CVEVerifier) checkCVE(ctx context.Context, cveID string) (bool, error) 
 		CachedAt:         time.Now(),
 	}
 
+	if !exists {
+		return false, nil
+	}
+	v.cacheMeta(cveID, meta)
+
+	return exists, nil
+}
+
+// checkCVE checks every requested identity and records uncertainty. Negative
+// results expire quickly because newly assigned IDs propagate asynchronously.
+func (v *CVEVerifier) checkCVE(ctx context.Context, id string) (bool, error) {
+	id = strings.ToUpper(id)
+	v.mu.Lock()
+	cached := v.cache[id]
+	if cached != nil {
+		ttl := cveCacheTTL
+		if !cached.Exists {
+			ttl = 5 * time.Minute
+		}
+		if time.Since(cached.CachedAt) < ttl {
+			v.mu.Unlock()
+			return cached.Exists, nil
+		}
+		delete(v.cache, id)
+	}
+	v.mu.Unlock()
+	exists, nvdErr := v.checkNVD(ctx, id)
+	if exists && nvdErr == nil {
+		return true, nil
+	}
+	if meta := v.GetMeta(id); meta != nil && meta.Verification.Status == "rejected" {
+		return false, nil
+	}
+	meta, err := v.checkCVEProgram(ctx, id)
+	if err != nil {
+		meta = &CVEMeta{Verification: CVEVerification{Status: "unavailable", Source: "nvd+cve_program", CheckedAt: time.Now().UTC()}, CachedAt: time.Now()}
+	} else if meta.Verification.Status == "not_found" && nvdErr != nil {
+		meta.Verification.Status = "unavailable"
+	}
+	v.cacheMeta(id, meta)
+	return meta.Exists, err
+}
+
+func (v *CVEVerifier) checkCVEProgram(ctx context.Context, id string) (*CVEMeta, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://cveawg.mitre.org/api/cve/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	meta := &CVEMeta{Verification: CVEVerification{Status: "not_found", Source: "cve_program", CheckedAt: time.Now().UTC()}, CachedAt: time.Now()}
+	if resp.StatusCode == http.StatusNotFound {
+		return meta, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("CVE Program returned %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxNVDRecordBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxNVDRecordBytes {
+		return nil, fmt.Errorf("CVE Program response exceeds limit")
+	}
+	var record struct {
+		Metadata struct {
+			ID    string `json:"cveId"`
+			State string `json:"state"`
+		} `json:"cveMetadata"`
+		Containers struct {
+			CNA struct {
+				Descriptions []nvdDescription `json:"descriptions"`
+			} `json:"cna"`
+		} `json:"containers"`
+	}
+	if err := json.Unmarshal(body, &record); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(record.Metadata.ID, id) {
+		return nil, fmt.Errorf("CVE Program identity mismatch")
+	}
+	switch strings.ToUpper(record.Metadata.State) {
+	case "PUBLISHED":
+		meta.Exists = true
+		meta.Verification.Status = "verified"
+	case "REJECTED":
+		meta.Verification.Status = "rejected"
+	case "RESERVED":
+		meta.Verification.Status = "reserved"
+	default:
+		return nil, fmt.Errorf("CVE Program unknown record state")
+	}
+	for _, d := range record.Containers.CNA.Descriptions {
+		if d.Lang == "en" {
+			meta.Description = d.Value
+			break
+		}
+	}
+	return meta, nil
+}
+
+func (v *CVEVerifier) cacheMeta(id string, meta *CVEMeta) {
 	v.mu.Lock()
 	// Evict oldest entries if cache exceeds max size.
 	if len(v.cache) >= cveCacheMaxSize {
@@ -375,8 +468,7 @@ func (v *CVEVerifier) checkCVE(ctx context.Context, cveID string) (bool, error) 
 			}
 		}
 	}
-	v.cache[cveID] = meta
+	v.cache[id] = meta
 	v.mu.Unlock()
 
-	return exists, nil
 }

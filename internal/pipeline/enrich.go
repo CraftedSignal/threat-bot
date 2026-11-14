@@ -90,8 +90,11 @@ func (e *ContentEnricher) Enrich(ctx context.Context, item *scraper.RawItem) []e
 	}
 
 	text, err := e.fetchText(ctx, item.URL)
-	if err != nil || (!required && len(text) < len(item.Content)) {
-		return nil
+	if err != nil {
+		return []error{fmt.Errorf("fetching source article: %w", err)}
+	}
+	if strings.TrimSpace(text) == "" || (!required && len(text) < len(item.Content)) {
+		return []error{fmt.Errorf("source article refresh did not return complete text")}
 	}
 	item.NeedsFullArticle = false
 

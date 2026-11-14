@@ -89,7 +89,7 @@ func TestGroundingAttemptsClearedWhenGroundingSucceeds(t *testing.T) {
 	defer db.Close()
 	// First Process: initial check + recheck both fail (attempt 1). Second: passes.
 	client, _ := groundingFailThenPass(2)
-	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, Logger: quietLogger()})
+	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, RetryBackoff: -time.Second, Logger: quietLogger()})
 	item := ghsaItem("GHSA-b")
 	for i := 0; i < 2; i++ {
 		if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
@@ -159,7 +159,7 @@ func TestGroundingViewKeepsSeverityForChecker(t *testing.T) {
 	}
 }
 
-func TestPipelineGroundingCheckSeesSurvivingLLMSeverity(t *testing.T) {
+func TestPipelineGroundingCheckOmitsSourceDerivedSeverity(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
 	var prompt string
@@ -177,11 +177,11 @@ func TestPipelineGroundingCheckSeesSurvivingLLMSeverity(t *testing.T) {
 	}
 	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, Logger: quietLogger()})
 	item := ghsaItem("GHSA-c")
-	item.Metadata["cvss"] = "9.8" // the CVSS band keeps "critical" a surviving label
+	item.Metadata["cvss"] = "9.8" // source-derived CVSS is separate from model inference
 	if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prompt, "severity: critical") {
-		t.Errorf("surviving LLM severity was not checked:\n%s", prompt)
+	if strings.Contains(prompt, "severity: critical") || !strings.Contains(prompt, "CVSS score: 9.8") {
+		t.Errorf("source-derived rating was presented as a model claim:\n%s", prompt)
 	}
 }

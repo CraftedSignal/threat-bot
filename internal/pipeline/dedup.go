@@ -448,6 +448,9 @@ func (d *Deduplicator) CheckPreExtraction(item scraper.RawItem) (DedupDecision, 
 
 // Prefetch needs the same decision without applying the corroboration boost.
 func (d *Deduplicator) checkPreExtraction(item scraper.RawItem, corroborate bool) (DedupDecision, []string, []storage.ContentIndexEntry) {
+	if decision, entries, ok := d.sourceRevisionMatch(item); ok {
+		return decision, subjectCVEs(item), entries
+	}
 	// Literal-duplicate guard: identical normalized content from a *different*
 	// source is a syndicated republication — skip it before any further work.
 	// Gated on substantial content so thin/degenerate items can't false-match;
@@ -494,11 +497,8 @@ func (d *Deduplicator) checkPreExtraction(item scraper.RawItem, corroborate bool
 		// Found a prior entry for this CVE — evaluate overlap.
 		decision := d.evaluateCVEOverlap(item, cve, entries)
 		if decision == DedupSkip {
-			// Before dropping to a plain skip: if the existing draft is thin
-			// (no CVEs indexed yet, no IOCs, no versioned products) let the
-			// new item enrich it even without exploit/patch signal, because
-			// any structured data it carries (IOCs, vendors, refs) is a net
-			// gain over the current sparse draft.
+			// A draft missing publication content, guidance or detection
+			// coverage can benefit even without an exploit/patch signal.
 			for _, e := range entries {
 				if e.DraftID != "" && d.isDraftThin(e.DraftID) {
 					return DedupMerge, cves, []storage.ContentIndexEntry{e}
@@ -551,11 +551,59 @@ func sourceURLHashesForRawItem(item scraper.RawItem) []string {
 	return SourceURLHashes(values...)
 }
 
-// isDraftThin reports whether an existing draft has so little structured
-// content that a duplicate from another source is more likely to enrich
-// it than to overwhelm it. "Thin" = no CVE list, no product entries that
-// carry a version qualifier, and no IOCs. Errors return false so we fall
-// back to the conservative DedupSkip path.
+// sourceRevisionMatch routes changed evidence back to the source's own live
+// draft before URL, title, CVE or syndication matching can discard it. A known
+// prior seen baseline is required: a new item cannot claim revision precedence.
+// The route does not consume the revision; the caller must validate and save it.
+func (d *Deduplicator) sourceRevisionMatch(item scraper.RawItem) (DedupDecision, []storage.ContentIndexEntry, bool) {
+	if item.SourceID == "" || item.Revision == "" {
+		return DedupNew, nil, false
+	}
+	known, err := d.db.HasSeen(item.SourceID)
+	if err != nil || !known {
+		return DedupNew, nil, false
+	}
+	seen, err := d.db.HasSeenRevision(item.SourceID, item.Revision)
+	if err != nil {
+		return DedupNew, nil, false
+	}
+	entries, err := d.db.FindBySourceID(item.SourceID)
+	if err != nil {
+		return DedupNew, nil, false
+	}
+	var target *storage.ContentIndexEntry
+	for i := range entries {
+		entry := &entries[i]
+		if entry.DraftID == "" || entry.Source != item.Source {
+			continue
+		}
+		draft, err := d.db.GetDraft(entry.DraftID)
+		if err != nil || draft == nil || draft.Status == storage.StatusRejected {
+			continue
+		}
+		if target == nil {
+			target = entry
+		}
+		// Prefer an approved canonical owner over a pending derivative.
+		if draft.Status == storage.StatusApproved {
+			target = entry
+			break
+		}
+	}
+	if target == nil {
+		return DedupNew, nil, false
+	}
+	decision := DedupMerge
+	if seen {
+		decision = DedupSkip
+	}
+	return decision, []storage.ContentIndexEntry{*target}, true
+}
+
+// isDraftThin reports whether the stored brief lacks the body, response,
+// detection coverage or asset scope required for publication. Identifiers,
+// version labels and IOCs alone do not establish semantic completeness.
+// Unreadable/rejected targets remain ineligible for automatic enrichment.
 func (d *Deduplicator) isDraftThin(draftID string) bool {
 	if draftID == "" {
 		return false
@@ -568,20 +616,10 @@ func (d *Deduplicator) isDraftThin(draftID string) bool {
 	if err := yaml.Unmarshal([]byte(draft.BriefYAML), &fm); err != nil {
 		return false
 	}
-	if list, ok := fm["cves"].([]any); ok && len(list) > 0 {
-		return false
+	if len(publicationQualityIssues(fm)) > 0 || lacksDetectionCoverage(fm) {
+		return true
 	}
-	if list, ok := fm["iocs"].([]any); ok && len(list) > 0 {
-		return false
-	}
-	if list, ok := fm["affected_products"].([]any); ok {
-		for _, p := range list {
-			if s, _ := p.(string); strings.Contains(s, "(") || strings.ContainsAny(s, "0123456789") {
-				return false
-			}
-		}
-	}
-	return true
+	return len(briefCVEIDs(fm)) > 0 && len(yamlStringList(fm["affected_vendors"])) == 0 && len(yamlStringList(fm["affected_products"])) == 0
 }
 
 // isProductDraft reports whether the referenced draft is a product-scoped
@@ -659,6 +697,9 @@ func (d *Deduplicator) evaluateCVEOverlap(item scraper.RawItem, cve string, entr
 // vulnerability target with an already-indexed brief. The fallbacks never
 // match a draft about a different CVE (cve_identity.go).
 func (d *Deduplicator) CheckPostExtraction(item scraper.RawItem, extraction *ExtractionResult) (DedupDecision, []storage.ContentIndexEntry) {
+	if decision, entries, ok := d.sourceRevisionMatch(item); ok {
+		return decision, entries
+	}
 	if extraction == nil {
 		return DedupNew, nil
 	}
@@ -682,6 +723,13 @@ func (d *Deduplicator) CheckPostExtraction(item scraper.RawItem, extraction *Ext
 			continue
 		}
 		decision := d.evaluateCVEOverlap(item, cve, entries)
+		if decision == DedupSkip {
+			for _, entry := range entries {
+				if entry.DraftID != "" && d.isDraftThin(entry.DraftID) {
+					return DedupMerge, []storage.ContentIndexEntry{entry}
+				}
+			}
+		}
 		if decision != DedupNew {
 			return decision, entries
 		}

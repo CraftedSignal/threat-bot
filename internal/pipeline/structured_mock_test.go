@@ -180,7 +180,11 @@ func (*sameIncidentMockLLM) GenerateStructured(context.Context, string, string, 
 func (m *qualityMockLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
 	return errUnexpectedStructured
 }
-func (pendingRumourLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
+func (pendingRumourLLM) GenerateStructured(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+	if r, ok := out.(*groundingReport); ok {
+		r.Issues = nil
+		return nil
+	}
 	return errUnexpectedStructured
 }
 func (f *pipelinePrefetchFake) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
@@ -189,7 +193,11 @@ func (f *pipelinePrefetchFake) GenerateStructured(context.Context, string, strin
 func (m *inferMockLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
 	return errUnexpectedStructured
 }
-func (mergeRelevanceMockLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
+func (mergeRelevanceMockLLM) GenerateStructured(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+	if r, ok := out.(*groundingReport); ok {
+		r.Issues = nil
+		return nil
+	}
 	return errUnexpectedStructured
 }
 func (roundupContentMockLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {

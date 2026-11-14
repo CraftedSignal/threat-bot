@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,6 +57,7 @@ type VertexBatch struct {
 	maxWait      time.Duration
 	httpClient   *http.Client
 	logger       *slog.Logger
+	store        BatchJobStore
 }
 
 var _ batchRunner = (*VertexBatch)(nil)
@@ -83,9 +85,11 @@ func NewVertexBatch(project, location, model, bucket string, pollInterval, maxWa
 }
 
 type batchJob struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
-	Error *struct {
+	Name        string    `json:"name"`
+	DisplayName string    `json:"displayName"`
+	CreateTime  time.Time `json:"createTime"`
+	State       string    `json:"state"`
+	Error       *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	OutputInfo struct {
@@ -116,7 +120,8 @@ type batchOutputConfig struct {
 
 // run answers reqs in one batch job and returns the answer text by request
 // key. Requests that fail inside the job are left out of the result.
-func (b *VertexBatch) run(ctx context.Context, reqs []Request) (map[string]string, error) {
+func (b *VertexBatch) runNew(ctx context.Context, reqs []Request) (map[string]string, error) {
+	ctx = withBatchCallMetadata(ctx, reqs)
 	ctx, stop := context.WithTimeout(ctx, b.maxWait)
 	defer stop()
 	inputs := make([]vertexRequest, 0, len(reqs))
@@ -141,12 +146,49 @@ func (b *VertexBatch) run(ctx context.Context, reqs []Request) (map[string]strin
 	if err := b.upload(ctx, inputObject, inputs); err != nil {
 		return nil, fmt.Errorf("uploading batch input: %w", err)
 	}
+	if b.store != nil {
+		if claimer, ok := b.store.(BatchJobClaimer); ok {
+			claimed, err := claimer.ClaimBatchJob(b.requestKeys(reqs), creationIntentPrefix+id)
+			if err != nil || !claimed {
+				return nil, pendingRequests(reqs, err)
+			}
+		} else if err := b.store.PutBatchJob(b.requestKeys(reqs), creationIntentPrefix+id); err != nil {
+			return nil, pendingRequests(reqs, err)
+		}
+	}
+	// No create request has been attempted yet. A cancellation observed at this
+	// boundary is demonstrably unsent, so release only our exact owned intent.
+	// After entering create, transport cancellation is ambiguous and stays held.
+	if err := ctx.Err(); err != nil {
+		if b.store != nil {
+			if cleanup := swapBatchReference(b.store, b.requestKeys(reqs), creationIntentPrefix+id, ""); cleanup != nil {
+				return nil, pendingRequests(reqs, errors.Join(err, cleanup))
+			}
+		}
+		return nil, err
+	}
 	job, err := b.create(ctx, id, "gs://"+b.bucket+"/"+inputObject, "gs://"+b.bucket+"/"+outputPrefix)
 	if err != nil {
+		if b.store != nil {
+			var he *HTTPError
+			if errors.As(err, &he) && he.StatusCode >= 400 && he.StatusCode < 500 {
+				if cleanup := updateOwnedBatchReference(b.store, b.requestKeys(reqs), creationIntentPrefix+id, ""); cleanup != nil {
+					return nil, pendingRequests(reqs, cleanup)
+				}
+			} else {
+				return nil, pendingRequests(reqs, err)
+			}
+		}
 		return nil, fmt.Errorf("creating batch job: %w", err)
 	}
 	b.logger.Info("batch job created", "job", job.Name, "requests", len(inputs))
 
+	if b.store != nil {
+		if err := updateOwnedBatchReference(b.store, b.requestKeys(reqs), creationIntentPrefix+id, job.Name); err != nil {
+			return nil, pendingRequests(reqs, err)
+		}
+		return b.awaitStored(ctx, job.Name, reqs)
+	}
 	job, err = b.wait(ctx, job.Name)
 	if err != nil {
 		return nil, err
@@ -222,7 +264,7 @@ func (b *VertexBatch) host() string { return vertexAIEndpoint(b.location) }
 
 func (b *VertexBatch) create(ctx context.Context, id, inputURI, outputPrefix string) (*batchJob, error) {
 	body := batchJobRequest{
-		DisplayName: "threat-bot-prefetch-" + id,
+		DisplayName: batchDisplayNamePrefix + id,
 		Model:       "publishers/google/models/" + b.model,
 	}
 	body.InputConfig.InstancesFormat = "jsonl"
@@ -357,6 +399,7 @@ func (b *VertexBatch) call(ctx context.Context, method, endpoint string, body []
 // collect reads every .jsonl file the job wrote and keeps the answers to the
 // requests in want.
 func (b *VertexBatch) collect(ctx context.Context, job *batchJob, want map[string]struct{}) (map[string]string, error) {
+	ctx = context.WithValue(ctx, batchJobTelemetryKey{}, batchJobTelemetry{Name: job.Name, CreateTime: job.CreateTime})
 	dir := job.OutputInfo.GCSOutputDirectory
 	bucket, prefix, ok := parseGCSURI(dir)
 	if !ok {
@@ -445,7 +488,12 @@ func (b *VertexBatch) download(ctx context.Context, bucket, object string, want 
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return batchTally{}, &HTTPError{StatusCode: resp.StatusCode, Body: string(msg)}
 	}
-	return collectBatchOutput(resp.Body, want, answers)
+	return collectBatchOutput(resp.Body, want, answers, func(key string, response vertexResponse) {
+		metadata, _ := ctx.Value(batchCallMetadataKey{}).(map[string]CallMetadata)
+		rctx := WithCallMetadata(ctx, metadata[key])
+		_, finishErr := structuredText(response)
+		logUsage(rctx, b.logger, b.model, "batch", key, response, 0, finishErr)
+	})
 }
 
 // batchTally counts what became of the lines in batch output.
@@ -481,7 +529,7 @@ func (l batchOutputLine) failed() bool {
 // echoed request, never from raw bytes, because the echo does not keep the key
 // order of the input. Lines with an error status or no answer text are not
 // stored, so their requests run live.
-func collectBatchOutput(r io.Reader, want map[string]struct{}, answers map[string]string) (batchTally, error) {
+func collectBatchOutput(r io.Reader, want map[string]struct{}, answers map[string]string, observers ...func(string, vertexResponse)) (batchTally, error) {
 	var tally batchTally
 	br := bufio.NewReaderSize(r, 64*1024)
 	var line []byte
@@ -505,6 +553,9 @@ func collectBatchOutput(r io.Reader, want map[string]struct{}, answers map[strin
 		if _, dup := answers[key]; dup {
 			tally.unmatched++
 			return
+		}
+		for _, observe := range observers {
+			observe(key, out.Response)
 		}
 		text, err := structuredText(out.Response)
 		if err != nil || len(text) > maxBatchAnswer {

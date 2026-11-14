@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/craftedsignal/threat-bot/internal/sigma"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +28,18 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 	title := publicationString(brief["title"])
 	summary := publicationString(brief["summary"])
 	content := publicationString(brief["content"])
+	if verification, ok := asStringMap(brief["cve_verification"]); ok {
+		for _, id := range publicationCVEs(brief["cves"], title+"\n"+summary+"\n"+content) {
+			entry, ok := asStringMap(verification[id])
+			if !ok {
+				continue
+			}
+			status := strings.ToLower(publicationString(entry["status"]))
+			if status == "rejected" || status == "reserved" {
+				issues = append(issues, fmt.Sprintf("CVE identity %s has authoritative status %s and requires editorial correction", id, status))
+			}
+		}
+	}
 	published, dateErr := time.Parse(time.RFC3339, publicationString(brief["published_at"]))
 	if dateErr == nil {
 		latestChange := published
@@ -75,7 +88,7 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 			issues = append(issues, "T1203 describes client exploitation but the evidence describes a server-side web application")
 		}
 	}
-	return issues
+	return append(issues, publicationQualityIssues(brief)...)
 }
 
 func publicationString(v any) string {
@@ -175,5 +188,21 @@ func briefTTPs(brief map[string]any) []any {
 // a rule nor a hunt lead to look for them.
 func lacksDetectionCoverage(brief map[string]any) bool {
 	actionPlan, _ := asStringMap(brief["action_plan"])
-	return len(briefTTPs(brief)) > 0 && len(yamlAnyList(brief["rules"])) == 0 && len(yamlAnyList(actionPlan["hunt_leads"])) == 0
+	if len(briefTTPs(brief)) == 0 {
+		return false
+	}
+	for _, item := range yamlAnyList(brief["rules"]) {
+		var rule briefRule
+		raw, err := yaml.Marshal(item)
+		if err == nil && yaml.Unmarshal(raw, &rule) == nil && len(sigma.Problems(rule.Title, sigma.LogSource(rule.LogSource), rule.Detection)) == 0 {
+			return false
+		}
+	}
+	for _, item := range yamlAnyList(actionPlan["hunt_leads"]) {
+		lead, ok := asStringMap(item)
+		if ok && meaningfulPublicationText(lead["lead"]) && meaningfulPublicationText(lead["evidence"]) && hasPublicationTelemetry(lead["data_needed"]) {
+			return false
+		}
+	}
+	return true
 }

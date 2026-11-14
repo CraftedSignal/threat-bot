@@ -53,7 +53,7 @@ func main() {
 			os.Exit(2)
 		}
 		return
-	case "run", "drafts", "digests", "bundle", "sources", "check-llm":
+	case "run", "drafts", "digests", "bundle", "sources", "check-llm", "efficiency":
 		if (cmd == "run" || cmd == "check-llm") && len(args) > 1 {
 			fmt.Fprintln(os.Stderr, "global flags must precede the command; run and check-llm take no arguments")
 			os.Exit(2)
@@ -64,6 +64,11 @@ func main() {
 		}
 	}
 	switch cmd {
+	case "efficiency":
+		if err := runEfficiency(args[1:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "efficiency: %v\n", err)
+			os.Exit(2)
+		}
 	case "run":
 		runScraper()
 	case "drafts":
@@ -117,6 +122,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  sources replay [--dry-run] ID...  Fetch source items and queue them in SQLite; use - for stdin")
 	fmt.Fprintln(os.Stderr, "  bundle drift     Inspect segment identity drift (network)")
 	fmt.Fprintln(os.Stderr, "  bundle enrich-vendors  Enrich missing vendor fields (provider calls; may publish)")
+	fmt.Fprintln(os.Stderr, "  efficiency [--since 24h]  Report retries and batch recovery state; explicit recovery flags mutate SQLite")
 	fmt.Fprintln(os.Stderr, "  check-llm        Smoke-check configured LLM models (network, possible provider cost)")
 	fmt.Fprintln(os.Stderr, "  canonicalize-products --content-dir PATH [--apply]  Dry-run product term cleanup and redirects")
 	fmt.Fprintln(os.Stderr, "\nGlobal flags must precede commands. Approve/reject/amend/reseed/replay mutate SQLite; publishing commands update GitHub.\nConfiguration precedence: -config > THREAT_BOT_CONFIG > config.yaml. No implicit production endpoints.")

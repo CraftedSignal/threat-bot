@@ -405,5 +405,6 @@ func (p *Pipeline) recordRoundupPosted(draftID string, item scraper.RawItem) err
 	if err := injectUpdateMetadata(&merged, draft, event); err != nil {
 		return err
 	}
-	return p.db.RecordDraftUpdate(draftID, merged, event)
+	publish := p.autoPublish && p.publisher != nil && p.validatePublication(merged) == nil
+	return p.db.RecordDraftUpdateWithPublication(draftID, merged, event, "", publish)
 }

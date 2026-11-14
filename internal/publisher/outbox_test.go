@@ -27,6 +27,12 @@ func outboxBriefYAML(id, title string) string {
 slug: "2026-02-20-%s"
 title: %q
 summary: "A test"
+content: |
+  ## Overview
+  This security notice records the reported issue for analyst review.
+
+  ## Recommendation
+  Review the cited advisory and assess the affected assets before remediation.
 severity: "high"
 published_at: "2026-02-20T10:00:00Z"
 `, id, id, title)

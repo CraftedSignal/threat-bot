@@ -118,7 +118,10 @@ action_plan:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			issues := ValidatePublicationConsistency(tt.yaml)
+			// These cases isolate date/scope/ATT&CK consistency. Supply the
+			// editorial minimum independently of those signals.
+			complete := tt.yaml + "content: |\n  ## Overview\n  The cited source describes the issue or observed behavior named above.\n\n  ## Recommendation\n  Review affected assets and the cited source for the applicable response.\n"
+			issues := ValidatePublicationConsistency(complete)
 			if tt.contains == "" {
 				if len(issues) > 0 {
 					t.Fatalf("unexpected issues: %v", issues)

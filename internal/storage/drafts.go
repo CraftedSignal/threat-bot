@@ -42,13 +42,7 @@ type UpdateEvent struct {
 
 // CreateDraft inserts a new draft brief.
 func (d *DB) CreateDraft(draft *Draft) error {
-	_, err := d.db.Exec(
-		`INSERT INTO drafts (id, status, score, source, source_ids, brief_yaml, validation_notes, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		draft.ID, draft.Status, draft.Score, draft.Source, draft.SourceIDs,
-		draft.BriefYAML, draft.ValidationNotes, draft.CreatedAt,
-	)
-	return err
+	return insertDraft(d.db, draft)
 }
 
 // scanDraft scans a draft row handling nullable columns.
@@ -400,6 +394,11 @@ func (d *DB) RecordDraftUpdate(id, briefYAML string, event UpdateEvent) error {
 // source is committed in the same transaction as the merged YAML so a retry
 // can never observe the intelligence without knowing which item supplied it.
 func (d *DB) RecordDraftUpdateWithSource(id, briefYAML string, event UpdateEvent, sourceID string) error {
+	return d.RecordDraftUpdateWithPublication(id, briefYAML, event, sourceID, false)
+}
+
+// RecordDraftUpdateWithPublication commits update and publication recovery together.
+func (d *DB) RecordDraftUpdateWithPublication(id, briefYAML string, event UpdateEvent, sourceID string, publish bool) error {
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -443,6 +442,11 @@ func (d *DB) RecordDraftUpdateWithSource(id, briefYAML string, event UpdateEvent
 	}
 	if changed != 1 {
 		return fmt.Errorf("draft %q not found", id)
+	}
+	if publish {
+		if err := insertPublicationIntent(tx, id, briefYAML, "", false); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

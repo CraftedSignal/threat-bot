@@ -271,6 +271,7 @@ func TestDraftPublicationCompletionFailureReplaysWithoutDuplicateBrief(t *testin
 func TestDraftPublicationNeverCompletesRejectedRevision(t *testing.T) {
 	_, p, _, badUpdate, _ := rejectionFixture(t, NewChangelog())
 	badUpdate.Summary = "A rejected change"
+	badUpdate.Content = "A separate vulnerability is reported in the replacement notice.\n\n## Recommendation\nReview the cited advisory and inventory affected assets before remediation."
 	badUpdate.Severity = "high"
 	p.UseSegmented = true
 	completed := 0

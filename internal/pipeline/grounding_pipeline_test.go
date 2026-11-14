@@ -238,7 +238,7 @@ func TestPipelineQuarantinesAfterMaxGroundingAttempts(t *testing.T) {
 			return nil
 		},
 	}
-	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 3, RetryBackoff: -time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	item := scraper.RawItem{SourceID: "kev:cap", Source: "cisa-kev", Title: "Vendor security advisory", Content: strings.Repeat("Confirmed vendor notice. ", 30), SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
 	for attempt := 1; attempt <= 3; attempt++ {
 		if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {

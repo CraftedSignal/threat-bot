@@ -44,7 +44,6 @@ func TestMergeHoldsInconsistentApprovedBriefWithoutChangingDraft(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
 	p := newDedupTestPipeline(t, db)
-	p.llmClient = nil
 	p.autoPublish = true
 	p.publisher = &shutdownTestPublisher{}
 	var logs bytes.Buffer
@@ -88,7 +87,6 @@ func TestMergePreflightsPublisherContractBeforeChangingDraft(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
 	p := newDedupTestPipeline(t, db)
-	p.llmClient = nil
 	p.autoPublish = true
 	p.publisher = &rejectingPublicationValidator{}
 	var logs bytes.Buffer

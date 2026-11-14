@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +51,161 @@ func (m mergeRelevanceMockLLM) GenerateJSON(_ context.Context, _ string, _ strin
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// Only the external model call is scripted; the merge and its persisted state
+// remain real so a permissive fallback cannot silently update the draft.
+func TestMergeIntoDraftDefersWhenRelevanceUnavailable(t *testing.T) {
+	checkerErr := errors.New("relevance provider unavailable")
+	tests := []struct {
+		name     string
+		noClient bool
+		response string
+		callErr  error
+	}{
+		{name: "no client", noClient: true},
+		{name: "provider error", callErr: checkerErr},
+		{name: "empty response", response: `{}`},
+		{name: "missing merge", response: `{"reference_relevant":true,"poc_relevant":true,"cves":["CVE-2026-4242"],"iocs":[{"type":"domain","value":"unrelated.example"}]}`},
+		{name: "missing reference decision", response: `{"merge":true,"poc_relevant":true,"cves":["CVE-2026-4242"],"iocs":[{"type":"domain","value":"unrelated.example"}]}`},
+		{name: "missing poc decision", response: `{"merge":true,"reference_relevant":true,"cves":["CVE-2026-4242"],"iocs":[{"type":"domain","value":"unrelated.example"}]}`},
+		{name: "null decision", response: `{"merge":null,"reference_relevant":true,"poc_relevant":true}`},
+		{name: "malformed decision", response: `{"merge":"yes","reference_relevant":true,"poc_relevant":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			p := newDedupTestPipeline(t, db)
+			p.llmClient = nil
+			if !tt.noClient {
+				p.llmClient = shutdownStageLLM{generateJSON: func(_ context.Context, _, system string, out any) error {
+					if system != mergeRelevanceSystemPrompt {
+						return fmt.Errorf("unexpected system prompt %q", system)
+					}
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					return json.Unmarshal([]byte(tt.response), out)
+				}}
+			}
+			if err := db.CreateDraft(&storage.Draft{
+				ID: "draft-unchanged", Status: storage.StatusApproved, Source: "original", SourceIDs: `["original:1"]`,
+				BriefYAML: "id: original\nslug: original\ntitle: Existing report\nsummary: Existing report\nseverity: high\ncontent: Existing report.\n",
+				CreatedAt: time.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := db.GetDraft("draft-unchanged")
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := scraper.RawItem{
+				SourceID: "exploit-db:unsupported", Source: "exploit-db", URL: "https://unrelated.example/exploit",
+				Title: "Public proof-of-concept for CVE-2026-4242", Content: "Public exploit code is available for CVE-2026-4242.",
+			}
+			mergeErr := p.mergeIntoDraft(context.Background(), "draft-unchanged", &ExtractionResult{
+				CVEs: []string{"CVE-2026-4242"}, IOCs: []ExtractedIOC{{Type: "domain", Value: "unrelated.example"}},
+			}, item)
+			if mergeErr == nil {
+				t.Error("unavailable or incomplete relevance check accepted a merge")
+			} else if !errors.Is(mergeErr, errMergeRelevanceUnavailable) || errors.Is(mergeErr, errMergeNotRelevant) {
+				t.Errorf("merge error = %v, want an informative checker failure rather than a story rejection", mergeErr)
+			}
+			if tt.callErr != nil && !errors.Is(mergeErr, tt.callErr) {
+				t.Errorf("merge error = %v, want wrapped provider error %v", mergeErr, tt.callErr)
+			}
+			after, err := db.GetDraft("draft-unchanged")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("failed relevance check changed persisted draft:\nbefore: %+v\nafter: %+v", before, after)
+			}
+		})
+	}
+}
+
+func TestAssessDraftMergeRelevanceRequiresExtraction(t *testing.T) {
+	p := &Pipeline{llmClient: mergeRelevanceMockLLM{merge: true, referenceRelevant: true, pocRelevant: true}}
+	got, decision, err := p.assessDraftMergeRelevance(context.Background(), nil, nil, scraper.RawItem{})
+	if !errors.Is(err, errMergeRelevanceUnavailable) || got != nil || decision.Merge || decision.ReferenceRelevant || decision.POCRelevant {
+		t.Fatalf("missing extraction accepted: extraction=%+v decision=%+v err=%v", got, decision, err)
+	}
+}
+
+func TestAssessDraftMergeRelevanceHonorsContextCancellation(t *testing.T) {
+	for _, when := range []string{"before check", "after accepted response", "during provider failure"} {
+		t.Run(when, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			p := &Pipeline{}
+			if when == "before check" {
+				cancel()
+			} else {
+				p.llmClient = shutdownStageLLM{generateJSON: func(_ context.Context, _, _ string, out any) error {
+					cancel()
+					if when == "during provider failure" {
+						return errors.New("provider disconnected")
+					}
+					return json.Unmarshal([]byte(`{"merge":true,"reference_relevant":true,"poc_relevant":true}`), out)
+				}}
+			}
+			got, decision, err := p.assessDraftMergeRelevance(ctx, nil, &ExtractionResult{}, scraper.RawItem{})
+			if !errors.Is(err, context.Canceled) || got != nil || decision.Merge || decision.ReferenceRelevant || decision.POCRelevant {
+				t.Fatalf("canceled relevance check accepted: extraction=%+v decision=%+v err=%v", got, decision, err)
+			}
+		})
+	}
+}
+
+func TestAssessDraftMergeRelevanceUsesExplicitDecisions(t *testing.T) {
+	tests := []struct {
+		name, response string
+		want           mergeRelevanceDecision
+	}{
+		{name: "explicit positive signals", response: `{"merge":true,"reference_relevant":true,"poc_relevant":true,"cves":["CVE-2026-4242"]}`, want: mergeRelevanceDecision{Merge: true, ReferenceRelevant: true, POCRelevant: true}},
+		{name: "explicit negative signals", response: `{"merge":true,"reference_relevant":false,"poc_relevant":false,"cves":["CVE-2026-4242"]}`, want: mergeRelevanceDecision{Merge: true}},
+		{name: "explicit refusal needs no acceptance flags", response: `{"merge":false}`, want: mergeRelevanceDecision{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pipeline{llmClient: shutdownStageLLM{generateJSON: func(_ context.Context, _, _ string, out any) error {
+				return json.Unmarshal([]byte(tt.response), out)
+			}}}
+			got, decision, err := p.assessDraftMergeRelevance(context.Background(), nil, &ExtractionResult{CVEs: []string{"CVE-2026-4242"}}, scraper.RawItem{})
+			if err != nil || decision != tt.want || got == nil {
+				t.Fatalf("explicit response: extraction=%+v decision=%+v err=%v; want %+v", got, decision, err, tt.want)
+			}
+			if tt.want.Merge && (len(got.CVEs) != 1 || got.CVEs[0] != "CVE-2026-4242") {
+				t.Fatalf("explicit acceptance dropped selected CVE: %+v", got)
+			}
+		})
+	}
+}
+
+func TestFilterRoundupContentExtractionDefersWhenRelevanceUnavailable(t *testing.T) {
+	for _, mode := range []string{"no client", "provider error", "missing decision"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &Pipeline{}
+			if mode != "no client" {
+				p.llmClient = shutdownStageLLM{generateJSON: func(context.Context, string, string, any) error {
+					if mode == "provider error" {
+						return errors.New("provider unavailable")
+					}
+					return nil
+				}}
+			}
+			extraction := &ExtractionResult{CVEs: []string{"CVE-2026-4242"}, AffectedProducts: []string{"Unrelated product"}, AffectedOS: []string{"Unrelated OS"}}
+			got, err := p.filterRoundupContentExtraction(context.Background(), "Microsoft", extraction, scraper.RawItem{})
+			if !errors.Is(err, errMergeRelevanceUnavailable) || got != nil {
+				t.Fatalf("unavailable roundup checker returned unfiltered scope: extraction=%+v err=%v", got, err)
+			}
+			if extraction.AffectedProducts[0] != "Unrelated product" || extraction.AffectedOS[0] != "Unrelated OS" {
+				t.Fatal("failed roundup check modified candidate extraction")
+			}
+		})
+	}
 }
 
 func TestConstrainMergeKeepsSingleCVETitleScoped(t *testing.T) {
@@ -114,7 +272,7 @@ affected_products:
 		Source:   "research",
 		Title:    "WidgetServer exploit writeup also mentions Roblox and Discord",
 		URL:      "https://research.example/widgetserver",
-		Content:  "A proof-of-concept exists for WidgetServer. The article also mentions Roblox, Discord, and https://solthere.net/api/v1/redeem as unrelated context.",
+		Content:  "A proof-of-concept exists for WidgetServer CVE-2026-4242 and uses evil.example. The article also mentions Roblox, Discord, and https://solthere.net/api/v1/redeem as unrelated context.",
 	}
 	extraction := &ExtractionResult{
 		CVEs:             []string{"CVE-2026-4242"},
@@ -418,7 +576,7 @@ affected_products:
 		Source:   "wiz",
 		Title:    "GhostApproval: a trust-boundary gap in AI coding assistants",
 		URL:      "https://www.wiz.io/blog/ghostapproval-a-trust-boundary-gap-in-ai-coding-assistants",
-		Content:  "GhostApproval affects several AI coding assistants including Amazon Q Developer, Claude Code, Cursor, Windsurf, Google Antigravity, and Augment. It lists adjacent CVEs CVE-2026-12958, CVE-2025-59536, CVE-2025-54136, CVE-2026-30615, and discusses runc CVE-2024-21626 as background.",
+		Content:  "CVE-2026-12957 GhostApproval affects several AI coding assistants including Amazon Q Developer, Claude Code, Cursor, Windsurf, Google Antigravity, and Augment. It lists adjacent CVEs CVE-2026-12958, CVE-2025-59536, CVE-2025-54136, CVE-2026-30615, and discusses runc CVE-2024-21626 as background.",
 	}
 	extraction := &ExtractionResult{
 		CVEs: []string{

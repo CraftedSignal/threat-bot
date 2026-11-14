@@ -2,20 +2,12 @@ package publisher
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/craftedsignal/threat-bot/internal/pipeline"
 	"gopkg.in/yaml.v3"
-)
-
-var (
-	versionToken          = `v?\d+(?:[._+-][A-Za-z0-9]+)*`
-	qualifiedVersionToken = `v?\d+(?:[._+-][A-Za-z0-9]+)+`
-	versionInParens       = regexp.MustCompile(`^(.+?)\s*\(\s*((?:versions?\s+)?(?:<=|>=|<|>|=|~|\^)\s*` + versionToken + `|(?:before|after)\s+` + versionToken + `|(?:n/?a|` + versionToken + `)\s+(?:to|through)\s+` + versionToken + `|` + versionToken + `(?:\s*,\s*` + versionToken + `)+|` + qualifiedVersionToken + `)\s*\)$`)
-	versionAfterName      = regexp.MustCompile(`^(.+?)\s+(before|after|through)\s+(v?\d[0-9A-Za-z.+:_-]*)$`)
 )
 
 var canonicalVendorAliases = map[string]string{"nginx": "NGINX"}
@@ -31,14 +23,7 @@ func CanonicalVendorName(raw string) string {
 }
 
 func productNameAndRange(raw string) (string, string) {
-	value := strings.TrimSpace(raw)
-	if m := versionInParens.FindStringSubmatch(value); m != nil {
-		return strings.TrimSpace(m[1]), strings.TrimSpace(m[2])
-	}
-	if m := versionAfterName.FindStringSubmatch(value); m != nil {
-		return strings.TrimSpace(m[1]), strings.TrimSpace(m[2] + " " + m[3])
-	}
-	return value, ""
+	return pipeline.SplitProductVersionScope(raw)
 }
 
 // CanonicalProductNameAndRange splits a product's exact version scope, when
@@ -48,7 +33,7 @@ func CanonicalProductNameAndRange(raw string) (string, string) { return productN
 func canonicalProductProjection(raw []string) []string {
 	seen := map[string]bool{}
 	var result []string
-	for _, item := range raw {
+	for _, item := range pipeline.CleanProductList(raw) {
 		name, _ := productNameAndRange(item)
 		cleaned := pipeline.CleanAffectedList([]string{name})
 		if len(cleaned) == 0 {
@@ -69,7 +54,7 @@ func canonicalProductProjection(raw []string) []string {
 func productVersionProjection(raw []string) []publicProductVersion {
 	seen := map[string]bool{}
 	var result []publicProductVersion
-	for _, item := range raw {
+	for _, item := range pipeline.CleanProductList(raw) {
 		name, scope := productNameAndRange(item)
 		name, scope = strings.TrimSpace(name), strings.TrimSpace(scope)
 		key := strings.ToLower(name) + "\x00" + strings.ToLower(scope)

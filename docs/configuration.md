@@ -7,7 +7,7 @@ Start from [config.example.yaml](../config.example.yaml). The CLI selects the fi
 ./threat-bot -config config.yaml config validate --command drafts
 ```
 
-Validation is offline: it checks configuration and applicable credential presence, without creating a database or contacting services. It cannot prove API permissions, model availability, directory writability, or source health. Supported validation scopes are `run`, `check-llm`, `drafts`, `sources`, `publish`, `bundle`, and `digests`.
+Validation is offline: it checks configuration and applicable credential presence, without creating a database or contacting services. It cannot prove API permissions, model availability, directory writability, or source health. Supported validation scopes are `run`, `check-llm`, `drafts`, `sources`, `publish`, `bundle`, `digests`, and `efficiency`.
 
 ## Core settings
 
@@ -18,10 +18,12 @@ Validation is offline: it checks configuration and applicable credential presenc
 | `llm.endpoint`, `llm.model` | Ollama endpoint and installed model; sample `http://localhost:11434`, `qwen3:8b`. |
 | `llm.project`, `llm.location`, `llm.model` | Vertex project, region, and model. |
 | `llm.fast_model` | Optional separate model for cheaper quality screening; otherwise uses the primary model. |
+| `llm.repair_model` | Optional targeted grounding repair model; otherwise uses the primary model. Readiness checks include a distinct repair model. |
 | `pipeline.auto_publish` | False in the example. Enabling it permits remote writes for qualifying drafts. |
 | `pipeline.quality_threshold` | Quality score threshold on the 1–5 scoring scale; sample 3.5. Zero is accepted; it is not a percentage. |
 | `pipeline.initial_lookback` | Initial source lookback, sample `24h`. |
 | `pipeline.max_grounding_attempts` | Maximum repair/grounding attempts; zero selects the default of 5. |
+| `pipeline.retry_backoff` | Delay between failed processing-candidate retries; zero selects the default of `15m`. |
 | `pipeline.source_confidence` | Optional per-source confidence multipliers. |
 | `pipeline.source_signal_thresholds` | Optional per-source deterministic evidence floor before model scoring. |
 | `pipeline.adaptive_polling` | Optional per-source maximum interval for quiet-source backoff. |
@@ -36,7 +38,7 @@ The example enables only `sources.cisa_kev`. Other source entries are opt-in. Mo
 
 `github.app_id`, `github.installation_id`, and `github.private_key_path` must be configured together. A configured App takes precedence; otherwise `GITHUB_TOKEN` can supply authentication. Local draft inspection does not require a publisher or model.
 
-`llm.batch` is opt-in and requires Vertex AI plus `bucket`. Its defaults when enabled are `poll_interval: 30s`, `max_wait: 15m`, and `min_prompts: 5`. Bucket retention and access controls are external responsibilities.
+New `llm.batch` submissions are opt-in and require Vertex AI plus `bucket`. Timing defaults are `poll_interval: 30s` and `max_wait: 15m`; they also apply to explicit recovery when new submissions are disabled. `min_prompts` defaults to `5` when batching is enabled. Bucket retention and access controls are external responsibilities.
 
 `epss.refresh_interval` defaults to `24h`, and `epss.min_score_delta` to `0.01`. `monitoring.public_feed_url` is empty/disabled by default; when configured, freshness defaults are a `45m` publication grace and `15m` check interval. `notifier.url` and a dispatch token enable optional notification, with default `6h` cooldown. Optional `watchlist.platform_sync` requires an operator-controlled endpoint and credentials.
 

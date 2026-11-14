@@ -8,9 +8,11 @@ Default evaluation is a **deterministic contract regression**, not a model accur
 go test ./internal/eval -run TestEvalGate -count=1 -v
 ```
 
+The same gate also runs twelve fictional publication-contract cases through manual validation, public rendering/backfill, durable outbox/restart, and same-identity updates. It requires every case and route, checks both acceptance and rejection, and includes an authored repair response with an omitted body. See [brief quality safeguards](brief-quality-safeguards.md) and the [publication fixture notice](../internal/eval/testdata/brief_quality/NOTICE). Captured production snapshots and third-party incident records are excluded.
+
 ## What is scored
 
-Records are grouped by document title. Predictions and gold labels become sets. Exact scoring retains sub-techniques; base scoring maps a sub-technique such as `T1059.001` to `T1059`. Macro scores aggregate document scores; micro scores pool label decisions. An extraction error counts as an empty prediction, so it reduces recall rather than disappearing from the report. This suite does not measure factual grounding, source coverage, IOC correctness, or useful detection content.
+Records are grouped by document title. Predictions and gold labels become sets. Exact scoring retains sub-techniques; base scoring maps a sub-technique such as `T1059.001` to `T1059`. Macro scores aggregate document scores; micro scores pool label decisions. An extraction error counts as an empty prediction, so it reduces recall rather than disappearing from the report. The extraction replay does not measure factual grounding, source coverage, IOC correctness, or useful detection content. Publication cases check deterministic structural and editorial contracts, not the accuracy of a live model.
 
 The [fixture notice](../internal/eval/testdata/NOTICE) and [machine-readable provenance](../internal/eval/testdata/provenance.json) record the original upstream commit/hashes, complete replacement, and current file hashes. The full `multi_label.json` was removed. Upstream Apache license/NOTICE are retained; report excerpts and their embedded credential-like text are not part of the candidate corpus.
 

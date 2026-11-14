@@ -84,6 +84,10 @@ type mergeRelevanceDecision struct {
 // instead of dropping it.
 var errMergeNotRelevant = errors.New("not relevant")
 
+// errMergeRelevanceUnavailable means the checker could not make a complete
+// decision. Callers must defer the source instead of merging or rejecting it.
+var errMergeRelevanceUnavailable = errors.New("merge relevance unavailable")
+
 // errNonAuthoritativeRoundupSource marks a merge refused by policy: only
 // authoritative sources may update a vendor roundup. It is a deterministic
 // decision, not a failure; the item gets its own draft.
@@ -96,23 +100,20 @@ type roundupContentRelevanceResponse struct {
 	Reason           string   `json:"reason"`
 }
 
-func defaultMergeRelevance(extraction *ExtractionResult) (*ExtractionResult, mergeRelevanceDecision) {
-	return cloneExtraction(extraction), mergeRelevanceDecision{
-		Merge:             true,
-		ReferenceRelevant: true,
-		POCRelevant:       true,
-	}
-}
-
 func (p *Pipeline) assessDraftMergeRelevance(ctx context.Context, fm map[string]any, extraction *ExtractionResult, item scraper.RawItem) (*ExtractionResult, mergeRelevanceDecision, error) {
-	fallbackExtraction, fallbackDecision := defaultMergeRelevance(extraction)
-	if p.llmClient == nil || extraction == nil {
-		return constrainMergeToTargetScope(fm, fallbackExtraction), fallbackDecision, nil
+	if err := ctx.Err(); err != nil {
+		return nil, mergeRelevanceDecision{}, err
+	}
+	if p.llmClient == nil {
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: no LLM client", errMergeRelevanceUnavailable, item.SourceID)
+	}
+	if extraction == nil {
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: no extraction", errMergeRelevanceUnavailable, item.SourceID)
 	}
 
 	candidateJSON, err := json.Marshal(extraction)
 	if err != nil {
-		return constrainMergeToTargetScope(fm, fallbackExtraction), fallbackDecision, nil
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: encode candidates: %w", errMergeRelevanceUnavailable, item.SourceID, err)
 	}
 	prompt := fmt.Sprintf(
 		mergeRelevancePrompt,
@@ -125,39 +126,36 @@ func (p *Pipeline) assessDraftMergeRelevance(ctx context.Context, fm map[string]
 	)
 
 	var resp mergeRelevanceLLMResponse
-	if err := p.llmClient.GenerateJSON(ctx, prompt, mergeRelevanceSystemPrompt, &resp); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-			return nil, mergeRelevanceDecision{}, ctxErr
-		}
-		if p.logger != nil {
-			p.logger.Warn("merge relevance LLM failed; using unfiltered extraction", "source_id", item.SourceID, "error", err)
-		}
-		return constrainMergeToTargetScope(fm, fallbackExtraction), fallbackDecision, nil
+	err = p.llmClient.GenerateJSON(ctx, prompt, mergeRelevanceSystemPrompt, &resp)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, mergeRelevanceDecision{}, ctxErr
+	}
+	if err != nil {
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: LLM call: %w", errMergeRelevanceUnavailable, item.SourceID, err)
 	}
 	if resp.Merge == nil {
-		if p.logger != nil {
-			p.logger.Warn("merge relevance LLM returned no merge decision; using unfiltered extraction", "source_id", item.SourceID)
-		}
-		return constrainMergeToTargetScope(fm, fallbackExtraction), fallbackDecision, nil
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: missing merge decision", errMergeRelevanceUnavailable, item.SourceID)
 	}
 
 	decision := mergeRelevanceDecision{
-		Merge:             *resp.Merge,
-		ReferenceRelevant: true,
-		POCRelevant:       true,
-		Reason:            strings.TrimSpace(resp.Reason),
-	}
-	if resp.ReferenceRelevant != nil {
-		decision.ReferenceRelevant = *resp.ReferenceRelevant
-	}
-	if resp.POCRelevant != nil {
-		decision.POCRelevant = *resp.POCRelevant
+		Merge:  *resp.Merge,
+		Reason: strings.TrimSpace(resp.Reason),
 	}
 	if !decision.Merge {
-		decision.ReferenceRelevant = false
-		decision.POCRelevant = false
 		return &ExtractionResult{}, decision, nil
 	}
+	var missing []string
+	if resp.ReferenceRelevant == nil {
+		missing = append(missing, "reference_relevant")
+	}
+	if resp.POCRelevant == nil {
+		missing = append(missing, "poc_relevant")
+	}
+	if len(missing) > 0 {
+		return nil, mergeRelevanceDecision{}, fmt.Errorf("%w for source %q: missing %s decision", errMergeRelevanceUnavailable, item.SourceID, strings.Join(missing, ", "))
+	}
+	decision.ReferenceRelevant = *resp.ReferenceRelevant
+	decision.POCRelevant = *resp.POCRelevant
 
 	filtered := &ExtractionResult{
 		Tactics:              extraction.Tactics,
@@ -180,9 +178,15 @@ func (p *Pipeline) assessDraftMergeRelevance(ctx context.Context, fm map[string]
 }
 
 func (p *Pipeline) filterRoundupContentExtraction(ctx context.Context, vendor string, extraction *ExtractionResult, item scraper.RawItem) (*ExtractionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	base := sanitizeRoundupContentExtraction(vendor, extraction)
-	if p.llmClient == nil || base == nil || (len(base.AffectedProducts) == 0 && len(base.AffectedOS) == 0) {
+	if base == nil || (len(base.AffectedProducts) == 0 && len(base.AffectedOS) == 0) {
 		return base, nil
+	}
+	if p.llmClient == nil {
+		return nil, fmt.Errorf("%w for roundup source %q: no LLM client", errMergeRelevanceUnavailable, item.SourceID)
 	}
 
 	prompt := fmt.Sprintf(
@@ -198,20 +202,15 @@ func (p *Pipeline) filterRoundupContentExtraction(ctx context.Context, vendor st
 	)
 
 	var resp roundupContentRelevanceResponse
-	if err := p.llmClient.GenerateJSON(ctx, prompt, roundupContentRelevanceSystemPrompt, &resp); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-			return nil, ctxErr
-		}
-		if p.logger != nil {
-			p.logger.Warn("roundup content relevance LLM failed; using unfiltered CVE detail", "source_id", item.SourceID, "error", err)
-		}
-		return base, nil
+	err := p.llmClient.GenerateJSON(ctx, prompt, roundupContentRelevanceSystemPrompt, &resp)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w for roundup source %q: LLM call: %w", errMergeRelevanceUnavailable, item.SourceID, err)
 	}
 	if resp.Relevant == nil {
-		if p.logger != nil {
-			p.logger.Warn("roundup content relevance LLM returned no decision; using unfiltered CVE detail", "source_id", item.SourceID)
-		}
-		return base, nil
+		return nil, fmt.Errorf("%w for roundup source %q: missing relevant decision", errMergeRelevanceUnavailable, item.SourceID)
 	}
 	if !*resp.Relevant {
 		base.AffectedProducts = nil

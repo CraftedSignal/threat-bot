@@ -16,8 +16,16 @@ import (
 // in the original source material — i.e., it doesn't contain hallucinated
 // claims, IOCs, CVEs, or technical details.
 type GroundingChecker struct {
-	llm    llm.Client
-	logger *slog.Logger
+	llm       llm.Client
+	repairLLM llm.Client
+	logger    *slog.Logger
+}
+
+// WithRepairClient selects an optional repair-only client. Fact checks keep
+// using the primary client and the repair still requires a subsequent check.
+func (g *GroundingChecker) WithRepairClient(client llm.Client) *GroundingChecker {
+	g.repairLLM = client
+	return g
 }
 
 // NewGroundingChecker creates a new GroundingChecker.
@@ -64,6 +72,29 @@ var groundingReportSchema = llm.MustSchemaOf[groundingReport]()
 
 const maxSourceLen = 24000
 
+// Routing ratings are generated decisions, not factual quotations. Only
+// absence-of-rating findings are ignored; impact and exploitation disputes
+// remain blocking even when the field named by the checker is severity.
+func nonFactualRatingIssue(issue groundingIssue, brief string) bool {
+	field := strings.ToLower(strings.TrimSpace(issue.Field))
+	rating := field == "severity" || field == "severity_basis" || (strings.HasPrefix(field, "rules") && strings.HasSuffix(field, "level"))
+	if !rating {
+		return false
+	}
+	reason := strings.ToLower(issue.Reason)
+	for _, factual := range []string{"overstat", "impact", "exploit", "execution", "compromise", "privilege", "destruct"} {
+		if strings.Contains(reason, factual) {
+			return false
+		}
+	}
+	for _, absent := range []string{"not stated", "not explicitly", "does not specify", "does not state", "doesn't specify", "not present", "absent", "no severity", "no rating", "not provided", "does not provide"} {
+		if strings.Contains(reason, absent) {
+			return true
+		}
+	}
+	return false
+}
+
 const groundingSystem = `You are a fact-checking assistant for threat intelligence briefs. Your job is to compare a generated brief against the original source material and report statements in the brief that the source does NOT support.
 
 Report only statements that are present in the brief and that the source does not support or clearly derive. For each, set kind to "unsupported_claim", name the brief field, quote the statement VERBATIM from the brief in brief_quote, and explain in reason why the source does not support it.
@@ -107,8 +138,12 @@ Report only statements present in the brief that the source does not support, qu
 	}
 
 	normalizedBrief := normalizeForQuote(briefYAML)
-	result := &GroundingResult{Issues: []string{}}
+	result := &GroundingResult{Issues: identityGroundingIssues(sourceTitle+"\n"+sourceContent, briefYAML)}
 	for _, issue := range report.Issues {
+		if nonFactualRatingIssue(issue, briefYAML) {
+			g.logger.Info("grounding rating issue dropped", "field", issue.Field, "reason", issue.Reason)
+			continue
+		}
 		if issue.Kind == groundingKindOmission {
 			// Completeness is not grounding: leaving out a source fact makes no
 			// false claim, and Repair (which only removes claims) could never
@@ -160,7 +195,11 @@ only when the source shows observed exploitation.
 
 %s`, source, briefYAML, strings.Join(issues, "\n"), exploitationStatesDefinition)
 	var revised revisedBrief
-	if err := generateStructured(ctx, g.llm, prompt, groundingRepairSystemPrompt, revisedBriefSchema, &revised, "grounding repair LLM call"); err != nil {
+	client := g.repairLLM
+	if client == nil {
+		client = g.llm
+	}
+	if err := generateStructured(ctx, client, prompt, groundingRepairSystemPrompt, revisedBriefSchema, &revised, "grounding repair LLM call"); err != nil {
 		return "", err
 	}
 	var original map[string]any
@@ -214,6 +253,23 @@ func mergeGroundingRepair(original map[string]any, revised revisedBrief) (map[st
 	}
 	for key, value := range doc {
 		merged[key] = value
+	}
+	// A checker-rejected scope is not eligible for automatic re-injection
+	// after repair. The revised product can still carry a corrected scope.
+	blocked := yamlStringList(original["grounding_rejected_scope"])
+	for _, before := range yamlStringList(original["affected_products"]) {
+		preserved := false
+		for _, after := range yamlStringList(doc["affected_products"]) {
+			if before == after {
+				preserved = true
+			}
+		}
+		if !preserved {
+			blocked = appendUniqueString(blocked, scopeProductKey(before))
+		}
+	}
+	if len(blocked) > 0 {
+		merged["grounding_rejected_scope"] = blocked
 	}
 	// "rumour" is assigned by the pipeline, not offered by the schema's severity
 	// enum, so a rumour must not lose it to the label the model had to pick.
@@ -345,7 +401,7 @@ func (p *Pipeline) quarantineUngrounded(item scraper.RawItem, briefYAML string, 
 	if err := p.db.QuarantinePipelineItem(item.SourceID, item.Source, item.Title, briefYAML, cause.Error()); err != nil {
 		return fmt.Errorf("persisting ungrounded brief quarantine: %w", err)
 	}
-	if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
+	if err := p.markSeen(item); err != nil {
 		return fmt.Errorf("marking quarantined brief seen: %w", err)
 	}
 	p.logger.Warn("quarantined ungrounded brief", "source_id", item.SourceID, "source", item.Source, "attempts", cause.Attempts, "issues", cause.Issues)
@@ -406,6 +462,22 @@ func groundingView(briefYAML, itemURL string) string {
 	for _, key := range pipelineOwnedTopLevelFields {
 		delete(doc, key)
 	}
+	if basis, ok := asStringMap(doc["severity_basis"]); ok {
+		switch fmt.Sprint(basis["kind"]) {
+		case "operational_policy", "source_cvss", "source_severity":
+			delete(doc, "severity")
+		}
+		delete(doc, "severity_basis")
+	}
+	delete(doc, "cve_verification")
+	delete(doc, "grounding_rejected_scope")
+	if rules, ok := doc["rules"].([]any); ok {
+		for _, raw := range rules {
+			if rule, ok := asStringMap(raw); ok {
+				delete(rule, "level")
+			}
+		}
+	}
 	if evidence, ok := doc["exploitation_evidence"].(map[string]any); ok &&
 		strings.EqualFold(strings.TrimSpace(fmt.Sprint(evidence["status"])), "unknown") {
 		delete(doc, "exploitation_evidence")
@@ -422,5 +494,15 @@ func groundingView(briefYAML, itemURL string) string {
 // source: the item text plus the structured advisory facts the generation
 // prompt told the model to copy, so those facts can never be flagged.
 func groundingSource(item scraper.RawItem) string {
-	return item.Content + structuredAdvisoryData(item)
+	source := item.URL + "\n" + item.Content + structuredAdvisoryData(item)
+	// These values are supplied by dedicated advisory scrapers, not the
+	// extraction model. Generic webpage metadata is not trusted authority.
+	if item.Source == "nvd" || item.Source == "ghsa" || item.Source == "cisa-kev" {
+		for _, key := range []string{"cve_id", "cve", "cves", "affected_ranges"} {
+			if value := item.Metadata[key]; value != "" {
+				source += "\n" + key + ": " + value
+			}
+		}
+	}
+	return source
 }

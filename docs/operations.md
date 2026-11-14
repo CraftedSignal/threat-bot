@@ -47,3 +47,5 @@ A restore drill should show that an existing draft and pending publication state
 ## Rename compatibility
 
 The executable, module, configuration environment variable, and source repository use `threat-bot`. Existing SQLite publication receipts retain their original `ti-bot-draft-publication-v1` comment marker so both this version and the previous deployed version can recover them. It is a persisted compatibility identifier, not an application setting; do not rewrite it in a database. Restores and image rollbacks still require the schema and configuration checks described above.
+
+Durable structured-request keys also retain their established `ti-bot-json-v2` namespace. Batch recovery recognizes both the old and current job display-name prefixes. These compatibility identifiers prevent completed or uncertain paid work from being submitted again during the rename; they are not branding or configuration choices. Inspect state with `efficiency`; use its explicit recovery flags only after reviewing the retained job reference.

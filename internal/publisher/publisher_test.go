@@ -22,6 +22,7 @@ func TestPublishBuffers(t *testing.T) {
 slug: "2026-02-20-test"
 title: "Test Brief"
 summary: "A test"
+content: The notice describes suspicious process activity that warrants host investigation.
 severity: "high"
 published_at: "2026-02-20T10:00:00Z"
 `
@@ -57,6 +58,7 @@ func TestPublishRejectsMissingPublicationDateBeforeBuffering(t *testing.T) {
 slug: undated
 title: Undated advisory
 summary: A summary
+content: The advisory describes a reported issue that requires affected asset review.
 severity: high
 `)
 	if err == nil || !strings.Contains(err.Error(), "published_at") {
@@ -68,7 +70,7 @@ severity: high
 }
 
 func TestPublishRejectsIncompleteCoreBriefBeforeBuffering(t *testing.T) {
-	base := "id: brief-test\nslug: 2026-10-test\ntitle: Test advisory\nsummary: Verified notice\nseverity: high\npublished_at: \"2026-10-21T07:00:00Z\"\n"
+	base := "id: brief-test\nslug: 2026-10-test\ntitle: Test advisory\nsummary: Verified notice\ncontent: The advisory describes a reported issue that requires affected asset review.\nseverity: high\npublished_at: \"2026-10-21T07:00:00Z\"\n"
 	for _, tc := range []struct{ name, old, want string }{
 		{"title", "title: Test advisory\n", "title"},
 		{"summary", "summary: Verified notice\n", "summary"},
@@ -93,6 +95,7 @@ func TestPublishRejectsInvalidExploitationEvidenceBeforeBuffering(t *testing.T) 
 slug: 2026-10-test
 title: Test advisory
 summary: Verified notice
+content: The advisory describes a reported issue; the exploitation status still requires validation.
 severity: high
 published_at: "2026-10-21T07:00:00Z"
 exploitation_evidence:
@@ -112,6 +115,7 @@ func TestPublishRejectsInvalidPublicMarkdownBeforeBuffering(t *testing.T) {
 slug: 2026-10-test
 title: Test advisory
 summary: Verified Widget advisory.
+content: Review affected Widget installations against the vendor advisory before applying a revision.
 severity: high
 published_at: "2026-10-21T07:00:00Z"
 revision: 2
@@ -131,6 +135,8 @@ func TestPublishRejectsContradictoryFinalBrief(t *testing.T) {
 slug: apache-struts-rce
 title: "Apache Struts: File upload remote code execution"
 summary: A public-facing web application vulnerability.
+content: An HTTP POST to the server's upload endpoint can write a web shell.
+severity: high
 published_at: "2026-09-15T00:00:00Z"
 ttps:
   - technique_id: T1203
@@ -180,6 +186,7 @@ func TestFlushNewBundle(t *testing.T) {
 slug: "test-1"
 title: "First Brief"
 summary: "First"
+content: The first report describes suspicious process activity for analyst investigation.
 severity: "high"
 published_at: "2026-02-20T10:00:00Z"
 `)
@@ -187,6 +194,7 @@ published_at: "2026-02-20T10:00:00Z"
 slug: "test-2"
 title: "Second Brief"
 summary: "Second"
+content: The second report describes additional host activity that requires separate review.
 severity: "medium"
 published_at: "2026-02-20T11:00:00Z"
 `)
@@ -280,6 +288,7 @@ func TestFlushMergesExistingBundle(t *testing.T) {
 slug: "new-1"
 title: "New Brief"
 summary: "New"
+content: The new report adds suspicious process observations for analyst investigation.
 severity: "high"
 published_at: "2026-02-20T10:00:00Z"
 `)
@@ -542,6 +551,7 @@ func TestPublishDropsInvalidSigmaRules(t *testing.T) {
 slug: "2026-10-09-rules"
 title: "Rules"
 summary: "A test"
+content: Detect tool.exe process launches and review their parent process for suspicious activity.
 severity: "high"
 published_at: "2026-10-09T10:00:00Z"
 rules:

@@ -20,7 +20,7 @@ func TestServicePublisherBuffersToOutbox(t *testing.T) {
 	cfg := &config.Config{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pub := newServicePublisher(cfg, func() string { return "" }, logger, nil, db)
-	err = pub.Publish("id: \"brief-1\"\nslug: \"2026-02-20-one\"\ntitle: \"One\"\nsummary: \"s\"\nseverity: \"high\"\npublished_at: \"2026-02-20T10:00:00Z\"\n")
+	err = pub.Publish("id: \"brief-1\"\nslug: \"2026-02-20-one\"\ntitle: \"One\"\nsummary: \"s\"\ncontent: A security notice records suspicious host activity for analyst review.\nseverity: \"high\"\npublished_at: \"2026-02-20T10:00:00Z\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}

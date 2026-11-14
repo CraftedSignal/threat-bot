@@ -13,17 +13,17 @@ type failingRunnerStore struct {
 	readErr, markErr, saveErr error
 }
 
-func (s *failingRunnerStore) HasSeen(id string) (bool, error) {
+func (s *failingRunnerStore) HasSeenRevision(id, revision string) (bool, error) {
 	if s.readErr != nil {
 		return false, s.readErr
 	}
-	return s.DB.HasSeen(id)
+	return s.DB.HasSeenRevision(id, revision)
 }
-func (s *failingRunnerStore) MarkSeen(id, source, title string) error {
+func (s *failingRunnerStore) MarkSeenRevision(id, source, title, revision string, evidenceKeys ...string) error {
 	if s.markErr != nil {
 		return s.markErr
 	}
-	return s.DB.MarkSeen(id, source, title)
+	return s.DB.MarkSeenRevision(id, source, title, revision, evidenceKeys...)
 }
 func (s *failingRunnerStore) SaveScraperState(source string, at time.Time, cursor string) error {
 	if s.saveErr != nil {

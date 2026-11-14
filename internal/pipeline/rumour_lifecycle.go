@@ -1,10 +1,17 @@
 package pipeline
 
 import (
-	"encoding/json"
+	"crypto/sha256"
 	"fmt"
+	"net"
 	"net/url"
+	"reflect"
 	"strings"
+
+	"github.com/craftedsignal/threat-bot/internal/scraper"
+	"gopkg.in/yaml.v3"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 func mergeRumourLifecycle(frontmatter map[string]any, extraction *ExtractionResult) bool {
@@ -18,8 +25,8 @@ func mergeRumourLifecycle(frontmatter map[string]any, extraction *ExtractionResu
 	assessment := *extraction.ClaimAssessment
 	var existing []ClaimEvidence
 	if raw, ok := frontmatter["evidence"]; ok {
-		if data, err := json.Marshal(raw); err == nil {
-			_ = json.Unmarshal(data, &existing)
+		if data, err := yaml.Marshal(raw); err == nil {
+			_ = yaml.Unmarshal(data, &existing)
 		}
 	}
 	assessment.Evidence = mergeClaimEvidence(existing, assessment.Evidence)
@@ -29,7 +36,7 @@ func mergeRumourLifecycle(frontmatter map[string]any, extraction *ExtractionResu
 		}
 	}
 	next := NextClaimState(current, assessment)
-	changed := next != current || len(assessment.Evidence) != len(existing)
+	changed := next != current || !reflect.DeepEqual(assessment.Evidence, existing)
 	if !changed {
 		return false
 	}
@@ -52,15 +59,21 @@ func mergeRumourLifecycle(frontmatter map[string]any, extraction *ExtractionResu
 }
 
 func mergeClaimEvidence(groups ...[]ClaimEvidence) []ClaimEvidence {
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	var out []ClaimEvidence
 	for _, group := range groups {
 		for _, e := range group {
 			key := strings.ToLower(strings.TrimSpace(e.Type) + "|" + strings.TrimSpace(e.SourceURL) + "|" + strings.TrimSpace(e.Detail))
-			if key == "||" || seen[key] {
+			if key == "||" {
 				continue
 			}
-			seen[key] = true
+			if index, ok := seen[key]; ok {
+				if attestedClaimEvidence(e) && !attestedClaimEvidence(out[index]) {
+					out[index] = e
+				}
+				continue
+			}
+			seen[key] = len(out)
 			out = append(out, e)
 		}
 	}
@@ -68,6 +81,49 @@ func mergeClaimEvidence(groups ...[]ClaimEvidence) []ClaimEvidence {
 }
 
 type ClaimState string
+
+// ClaimEvidenceProvenance is pipeline-attested, never a model JSON field.
+// The digest binds it to the precise attributed evidence across persistence.
+type ClaimEvidenceProvenance struct {
+	SourceURL      string `yaml:"source_url"`
+	SourceID       string `yaml:"source_id"`
+	Source         string `yaml:"source"`
+	EvidenceHash   string `yaml:"evidence_hash"`
+	TrustedPrimary bool   `yaml:"trusted_primary"`
+	Independent    bool   `yaml:"independent"`
+}
+
+func claimEvidenceHash(e ClaimEvidence) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(e.Type+"\n"+strings.TrimSpace(e.SourceURL)+"\n"+strings.TrimSpace(e.Detail))))
+}
+
+func attestedClaimEvidence(e ClaimEvidence) bool {
+	p := e.Provenance
+	return p != nil && p.SourceURL == e.SourceURL && p.EvidenceHash == claimEvidenceHash(e) && claimEvidenceLineage(e) != ""
+}
+
+func trustedClaimPrimary(item scraper.RawItem, vendors []string) bool {
+	u, err := url.Parse(item.URL)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if item.Source == "nvd" && host == "nvd.nist.gov" {
+		return true
+	}
+	if item.Source == "cisa-kev" && hasDomainSuffix(host, "cisa.gov") {
+		return true
+	}
+	if item.Source == "ghsa" && host == "github.com" && strings.HasPrefix(u.Path, "/advisories/") {
+		return true
+	}
+	for _, vendor := range vendors {
+		if hostnameMatchesVendor(item.URL, vendor) {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	ClaimReported  ClaimState = "reported"
@@ -82,30 +138,65 @@ func IndependentEvidenceLineages(evidence []ClaimEvidence) int {
 		if e.Type != "artifact" && e.Type != "first_party_observation" && e.Type != "authoritative_primary" {
 			continue
 		}
-		u, err := url.Parse(strings.TrimSpace(e.SourceURL))
-		if err != nil || u.Hostname() == "" {
-			continue
+		if lineage := claimEvidenceLineage(e); lineage != "" {
+			seen[lineage] = true
 		}
-		u.Fragment = ""
-		key := strings.ToLower(u.Hostname() + u.Path)
-		seen[key] = true
 	}
 	return len(seen)
 }
+
+// claimEvidenceLineage requires an attributed statement and groups it by
+// publisher domain. The evidence schema has no independently verified author
+// or citation lineage, so separate paths, subdomains, and posts cannot establish
+// independence. This deliberately counts shared-platform reports conservatively.
+func claimEvidenceLineage(e ClaimEvidence) string {
+	detail := strings.TrimSpace(e.Detail)
+	if detail == "" || isPlaceholder(detail) {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(e.SourceURL))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		return ""
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || net.ParseIP(host) != nil || strings.HasSuffix(host, ".local") {
+		return ""
+	}
+	lineage, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return ""
+	}
+	if lineage == "twitter.com" {
+		lineage = "x.com"
+	}
+	return lineage
+}
+
 func NextClaimState(current ClaimState, a ClaimAssessment) ClaimState {
-	switch strings.ToLower(strings.TrimSpace(a.Status)) {
-	case "retracted", "withdrawn":
-		return ClaimRetracted
-	case "disputed", "contradicted":
-		return ClaimDisputed
+	status := strings.ToLower(strings.TrimSpace(a.Status))
+	for _, e := range a.Evidence {
+		if !attestedClaimEvidence(e) {
+			continue
+		}
+		detail := strings.ToLower(e.Detail)
+		switch status {
+		case "retracted", "withdrawn":
+			if e.Provenance.TrustedPrimary && (strings.Contains(detail, "retract") || strings.Contains(detail, "withdraw")) {
+				return ClaimRetracted
+			}
+		case "disputed", "contradicted":
+			if strings.Contains(detail, "disput") || strings.Contains(detail, "contradict") {
+				return ClaimDisputed
+			}
+		}
 	}
 	authoritative := false
 	artifacts := []ClaimEvidence{}
 	for _, e := range a.Evidence {
-		if e.Type == "authoritative_primary" {
+		if e.Type == "authoritative_primary" && attestedClaimEvidence(e) && e.Provenance.TrustedPrimary {
 			authoritative = true
 		}
-		if e.Type == "artifact" && strings.TrimSpace(e.Detail) != "" {
+		if e.Type == "artifact" && attestedClaimEvidence(e) && e.Provenance.Independent {
 			artifacts = append(artifacts, e)
 		}
 	}

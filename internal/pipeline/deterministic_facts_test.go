@@ -26,8 +26,8 @@ func TestExtractPatchVersionHintReturnsAllBeforeVersions(t *testing.T) {
 		if !slices.Equal(got.BeforeVersions, want) {
 			t.Errorf("%q: BeforeVersions = %v, want %v", text, got.BeforeVersions, want)
 		}
-		if got.FixedVersion != want[0] || got.VulnerableRange == "" {
-			t.Errorf("%q: legacy fields changed: %+v", text, got)
+		if got.FixedVersion != "" || got.VulnerableRange == "" {
+			t.Errorf("%q: a boundary must not assert a fixed release: %+v", text, got)
 		}
 	}
 }
@@ -47,12 +47,12 @@ affected_products:
   - DiskStation Manager
 `
 
-func TestInjectAffectedRangesAddsAllVersionsOnce(t *testing.T) {
+func TestInjectAffectedRangesHoldsAmbiguousBranches(t *testing.T) {
 	item := synologyItem()
 	once := injectAffectedRanges(synologyBrief, item)
 	for _, v := range []string{"7.3.2-86009-5", "7.4.1-90080-1"} {
-		if !strings.Contains(once, v) {
-			t.Errorf("version %s missing:\n%s", v, once)
+		if strings.Contains(once, v) {
+			t.Errorf("ambiguous branch %s injected:\n%s", v, once)
 		}
 	}
 	if twice := injectAffectedRanges(once, item); twice != once {
@@ -80,7 +80,7 @@ func TestInjectAffectedRangesUsesNVDMetadataRanges(t *testing.T) {
 	}
 }
 
-func TestPipelineRendersAllNVDVersionsBeforeGrounding(t *testing.T) {
+func TestPipelineKeepsAmbiguousNVDVersionsInSourceOnly(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
 	var prompt string
@@ -105,10 +105,8 @@ func TestPipelineRendersAllNVDVersionsBeforeGrounding(t *testing.T) {
 	if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []string{"7.3.2-86009-5", "7.4.1-90080-1"} {
-		if !strings.Contains(prompt, "DiskStation Manager (") || !strings.Contains(prompt, "< "+v) {
-			t.Fatalf("grounding saw no rendered version %s:\n%s\nlogs:%s", v, prompt, logs.String())
-		}
+	if strings.Contains(prompt, "DiskStation Manager (<") {
+		t.Fatalf("ambiguous branches synthesized in prompt: %s", prompt)
 	}
 	found := false
 	for draft, err := range db.DraftsWithStatus(storage.StatusPending) {
@@ -116,8 +114,8 @@ func TestPipelineRendersAllNVDVersionsBeforeGrounding(t *testing.T) {
 			t.Fatal(err)
 		}
 		found = true
-		if !strings.Contains(draft.BriefYAML, "7.3.2-86009-5") || !strings.Contains(draft.BriefYAML, "7.4.1-90080-1") {
-			t.Errorf("saved brief lacks versions:\n%s", draft.BriefYAML)
+		if strings.Contains(draft.BriefYAML, "DiskStation Manager (<") {
+			t.Errorf("saved brief invented a branch intersection:\n%s", draft.BriefYAML)
 		}
 	}
 	if !found {

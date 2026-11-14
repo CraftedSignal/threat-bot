@@ -90,7 +90,7 @@ func TestPipelineStopsWithoutErrorLogOrSeenMutationOnShutdown(t *testing.T) {
 	item := shutdownPipelineItem("shutdown-quality", "test-feed")
 
 	if err := pipe.Process(ctx, []scraper.RawItem{item}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("process error = %v, want context cancellation", err)
+		t.Fatalf("process error = %v, want context cancellation; logs=%s", err, logs.String())
 	}
 	if out := logs.String(); strings.Contains(out, `"level":"ERROR"`) {
 		t.Fatalf("shutdown cancellation was logged as an error: %s", out)
@@ -140,7 +140,7 @@ func TestPipelineDoesNotQuarantineBriefGenerationCanceledByShutdown(t *testing.T
 	item.SigmaRule = &scraper.SigmaRule{Title: "Credential theft detection", Detection: map[string]any{"condition": "selection"}}
 
 	if err := pipe.Process(ctx, []scraper.RawItem{item}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("process error = %v, want context cancellation", err)
+		t.Fatalf("process error = %v, want context cancellation; logs=%s", err, logs.String())
 	}
 	if generateCalls != 1 {
 		t.Fatalf("LLM calls = %d, want the interrupted brief call only", generateCalls)
@@ -224,7 +224,7 @@ func TestPipelineStopsBeforePublishWhenGroundingIsCanceledByShutdown(t *testing.
 	item.SigmaRule = &scraper.SigmaRule{Title: "Credential theft detection", Detection: map[string]any{"condition": "selection"}}
 
 	if err := pipe.Process(ctx, []scraper.RawItem{item}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("process error = %v, want context cancellation", err)
+		t.Fatalf("process error = %v, want context cancellation; logs=%s", err, logs.String())
 	}
 	if out := logs.String(); strings.Contains(out, "grounding check failed") || strings.Contains(out, `"level":"ERROR"`) {
 		t.Fatalf("shutdown-canceled grounding was logged as a failure: %s", out)
@@ -276,7 +276,7 @@ func TestPipelineStopsBeforePublishWhenRuleRepairIsCanceledByShutdown(t *testing
 	item.SigmaRule = &scraper.SigmaRule{Title: "Credential theft detection", Detection: map[string]any{"condition": "selection"}}
 
 	if err := pipe.Process(ctx, []scraper.RawItem{item}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("process error = %v, want context cancellation", err)
+		t.Fatalf("process error = %v, want context cancellation; logs=%s", err, logs.String())
 	}
 	seen, err := db.HasSeen(item.SourceID)
 	if err != nil {
@@ -356,7 +356,7 @@ rules:
 	})
 
 	if err := pipe.Process(ctx, []scraper.RawItem{item}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("process error = %v, want context cancellation", err)
+		t.Fatalf("process error = %v, want context cancellation; logs=%s", err, logs.String())
 	}
 	seen, err := db.HasSeen(item.SourceID)
 	if err != nil {
@@ -393,7 +393,7 @@ func TestRuleRepairKeepsChildCancellationAsFallbackNote(t *testing.T) {
 	}
 }
 
-func TestMergeRelevanceKeepsChildCancellationAsFallback(t *testing.T) {
+func TestMergeRelevanceDefersOnChildCancellation(t *testing.T) {
 	client := shutdownStageLLM{
 		generate: func(context.Context, string, string) (string, error) {
 			return "", errors.New("unexpected text generation")
@@ -409,10 +409,10 @@ func TestMergeRelevanceKeepsChildCancellationAsFallback(t *testing.T) {
 		"title":             "WidgetServer vulnerability",
 		"affected_products": []any{"WidgetServer"},
 	}, extraction, scraper.RawItem{SourceID: "child-relevance", Title: "WidgetServer update"})
-	if err != nil {
-		t.Fatalf("child cancellation became service shutdown: %v", err)
+	if !errors.Is(err, errMergeRelevanceUnavailable) {
+		t.Fatalf("child cancellation did not defer relevance check: %v", err)
 	}
-	if !decision.Merge || len(got.AffectedProducts) != 1 || got.AffectedProducts[0] != "WidgetServer" {
-		t.Fatalf("child cancellation did not use merge fallback: decision=%+v extraction=%+v", decision, got)
+	if decision.Merge || decision.ReferenceRelevant || decision.POCRelevant || got != nil {
+		t.Fatalf("child cancellation accepted a merge: decision=%+v extraction=%+v", decision, got)
 	}
 }

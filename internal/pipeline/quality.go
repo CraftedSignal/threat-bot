@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -115,6 +117,10 @@ func (g *QualityGate) Evaluate(ctx context.Context, item scraper.RawItem) (float
 
 	var score QualityScore
 	if err := g.client.GenerateJSON(ctx, req.Prompt, req.System, &score); err != nil {
+		var pending *llm.PendingBatchError
+		if errors.As(err, &pending) {
+			return 0, false, fmt.Errorf("quality gate deferred: %w", err)
+		}
 		if g.fallbackClient == nil {
 			return 0, false, fmt.Errorf("quality gate LLM call: %w", err)
 		}
@@ -125,6 +131,7 @@ func (g *QualityGate) Evaluate(ctx context.Context, item scraper.RawItem) (float
 			}
 			g.logger.Log(ctx, level, "quality gate fast model failed; retrying primary model", "error", err)
 		}
+		score = QualityScore{}
 		if fallbackErr := g.fallbackClient.GenerateJSON(ctx, req.Prompt, req.System, &score); fallbackErr != nil {
 			return 0, false, fmt.Errorf("quality gate fallback LLM call: %w (fast error: %v)", fallbackErr, err)
 		}
@@ -137,7 +144,27 @@ func qualityRequest(item scraper.RawItem) llm.Request {
 	return llm.Request{Prompt: fmt.Sprintf(qualityPrompt, item.Title, item.Source, smartTruncate(item.Content, 8000)), System: qualitySystemPrompt, JSON: true}
 }
 
+// ValidateLLMResponse also protects cached/batched results before they become
+// reusable responses. A malformed score must never turn into a passing average.
+func (score *QualityScore) ValidateLLMResponse() error {
+	if score == nil {
+		return fmt.Errorf("missing quality score")
+	}
+	for _, dimension := range []struct {
+		name  string
+		value float64
+	}{{"credibility", score.Credibility}, {"actionability", score.Actionability}, {"novelty", score.Novelty}} {
+		if math.IsNaN(dimension.value) || math.IsInf(dimension.value, 0) || dimension.value < 1 || dimension.value > 5 {
+			return fmt.Errorf("invalid quality score %s=%v: must be finite and between 1 and 5", dimension.name, dimension.value)
+		}
+	}
+	return nil
+}
+
 func (g *QualityGate) evaluateScore(score QualityScore) (float64, bool, error) {
+	if err := score.ValidateLLMResponse(); err != nil {
+		return 0, false, err
+	}
 	avg := score.Average()
 	// Hard floor: reject items with very low actionability regardless of average.
 	// This filters news roundups, weekly summaries, and opinion pieces that score

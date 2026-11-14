@@ -28,13 +28,17 @@ type detectionRuleMetadata struct {
 // the rest of the generated YAML intact.
 func normalizeDetectionSeverity(briefYAML string, item scraper.RawItem) string {
 	if severity := structuredAdvisorySeverity(item); severity != "" {
-		return setBriefSeverity(briefYAML, severity)
+		kind := SeveritySourceCVSS
+		if sourceSeverityClampRank[strings.ToLower(item.Metadata["severity"])] > 0 || strings.EqualFold(item.Metadata["severity"], "moderate") {
+			kind = SeveritySourceRating
+		}
+		return setSeverityBasis(setBriefSeverity(briefYAML, severity), SeverityBasis{Kind: kind, Source: item.Source, SourceURL: item.URL, Rule: "advisory-band/v1"})
 	}
 	maxSeverity := detectionSeverityCap(item)
 	if maxSeverity == "" {
-		return briefYAML
+		return setSeverityBasis(briefYAML, SeverityBasis{Kind: SeverityModelInference})
 	}
-	return clampBriefSeverity(briefYAML, maxSeverity)
+	return setSeverityBasis(clampBriefSeverity(briefYAML, maxSeverity), SeverityBasis{Kind: SeverityOperationalPolicy, Source: item.Source, SourceURL: item.URL, Rule: "detector-priority-cap/v1"})
 }
 
 func detectionSeverityCap(item scraper.RawItem) string {
@@ -212,7 +216,7 @@ func structuredAdvisorySeverity(item scraper.RawItem) string {
 		return "low"
 	}
 	score, err := strconv.ParseFloat(strings.TrimSpace(item.Metadata["cvss"]), 64)
-	if err != nil || score <= 0 {
+	if err != nil || score <= 0 || score > 10 {
 		return ""
 	}
 	switch {

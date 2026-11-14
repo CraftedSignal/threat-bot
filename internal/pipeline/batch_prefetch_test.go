@@ -51,6 +51,15 @@ func (f *pipelinePrefetchFake) Prefetch(ctx context.Context, reqs []llm.Request)
 }
 func (f *pipelinePrefetchFake) Cached(r llm.Request, out any) bool {
 	text, ok := f.answers[r]
+	// Model lookup is by wire request; schema and attribution metadata are not prompt data.
+	if !ok {
+		for key, value := range f.answers {
+			if key.Prompt == r.Prompt && key.System == r.System && key.JSON == r.JSON {
+				text, ok = value, true
+				break
+			}
+		}
+	}
 	return ok && json.Unmarshal([]byte(text), out) == nil
 }
 func (f *pipelinePrefetchFake) Release() { f.released++; clear(f.answers) }
@@ -156,7 +165,15 @@ func TestPipelineProcessBoundsBatchChunks(t *testing.T) {
 
 func TestPipelinePrefetchDoesNotBoostDraftScore(t *testing.T) {
 	p, _ := batchTestPipeline(t)
-	draft := &storage.Draft{ID: "existing", Score: 3, Status: storage.StatusPending, BriefYAML: "cves: [CVE-2026-12345]", CreatedAt: time.Now()}
+	draft := &storage.Draft{ID: "existing", Score: 3, Status: storage.StatusPending, BriefYAML: `id: existing
+cves: [CVE-2026-12345]
+summary: WidgetOS vulnerability notice.
+affected_products: [WidgetOS]
+content: |
+  The advisory identifies CVE-2026-12345 in WidgetOS and describes its affected installations.
+  ## Recommendation
+  Inventory WidgetOS deployments and apply the vendor advisory's remediation.
+`, CreatedAt: time.Now()}
 	if err := p.db.CreateDraft(draft); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +182,7 @@ func TestPipelinePrefetchDoesNotBoostDraftScore(t *testing.T) {
 	}
 	item := batchItem("corroborating")
 	item.Title = "CVE-2026-12345 advisory"
-	item.Source = "nvd"
+	item.Source = "ghsa"
 	p.prefetchItems(context.Background(), []scraper.RawItem{item})
 	got, err := p.db.GetDraft(draft.ID)
 	if err != nil || got.Score != 3 {
@@ -214,5 +231,41 @@ func TestPipelineBatchEnrichmentDoesNotRetainArticlesInInput(t *testing.T) {
 	}
 	if items[0].Enriched || items[0].Content != original {
 		t.Fatal("enriched article retained by caller's input slice")
+	}
+}
+
+// Invalid model scoring must not pass the quality gate or enter the durable LLM cache.
+func TestQualityScoreRejectsInvalidLLMValues(t *testing.T) {
+	for _, score := range []*QualityScore{{Credibility: 6, Actionability: 5, Novelty: 5}, {Credibility: 5, Actionability: 0, Novelty: 5}, {Credibility: 5, Actionability: 5, Novelty: 1e100}} {
+		if err := score.ValidateLLMResponse(); err == nil {
+			t.Fatalf("accepted invalid quality score: %+v", score)
+		}
+	}
+	if err := (&QualityScore{Credibility: 5, Actionability: 3, Novelty: 1}).ValidateLLMResponse(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractionRejectsInvalidCachedIdentifiers(t *testing.T) {
+	for _, ex := range []*ExtractionResult{{CVEs: []string{"CVE-not-an-id"}}, {Techniques: []string{"TA0001"}}, {IOCs: []ExtractedIOC{{Type: "campaign", Value: "name"}}}} {
+		if err := ex.ValidateLLMResponse(); err == nil {
+			t.Fatalf("accepted invalid extraction: %+v", ex)
+		}
+	}
+	if err := (&ExtractionResult{CVEs: []string{"CVE-2026-12345"}, Techniques: []string{"T1059.003"}, IOCs: []ExtractedIOC{{Type: "domain", Value: "malicious.example"}}}).ValidateLLMResponse(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExtractionRejectsEmptyModelErrorObject(t *testing.T) {
+	var ex ExtractionResult
+	if err := json.Unmarshal([]byte(`{"error":"unsupported request"}`), &ex); err != nil {
+		t.Fatal(err)
+	}
+	if err := ex.ValidateLLMResponse(); err == nil {
+		t.Fatal("unknown error object would be cached as empty successful extraction")
+	}
+	if err := (&ExtractionResult{Summary: "This item contains no concrete threat indicators."}).ValidateLLMResponse(); err != nil {
+		t.Fatal(err)
 	}
 }

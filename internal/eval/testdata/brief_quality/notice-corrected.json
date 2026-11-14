@@ -1,0 +1,27 @@
+{
+  "id": "brief-corpus-widget",
+  "slug": "2026-11-corpus-widget",
+  "title": "Widget arbitrary file deletion (CVE-2026-4242)",
+  "summary": "Widget 2.1 permits arbitrary file deletion with administrator interaction.",
+  "severity": "high",
+  "published_at": "2026-11-14T06:00:00Z",
+  "content": "## Overview\nWidget 2.1 processes attachment changes requested by an administrator. In this fictional scenario, an attachment change can remove a file unexpectedly. The advisory does not identify a corrected release.\n\n## Recommendation\nInventory Widget deployments and consult the vendor advisory before planning remediation. Review file-integrity alerts around administrator attachment changes; the affected version alone does not identify a fixed release.",
+  "affected_vendors": [
+    "WidgetCo"
+  ],
+  "affected_products": [
+    "Widget (2.1)"
+  ],
+  "cves": [
+    {
+      "id": "CVE-2026-4242",
+      "kev_status": "unknown"
+    }
+  ],
+  "references": [
+    "https://vendor.example/widget/advisory"
+  ],
+  "exploitation_evidence": {
+    "status": "unknown"
+  }
+}

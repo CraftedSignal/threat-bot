@@ -2,6 +2,9 @@ package scraper
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -27,6 +30,8 @@ type RawItem struct {
 	URL         string
 	Content     string
 	PublishedAt time.Time
+	UpdatedAt   time.Time
+	Revision    string
 	Metadata    map[string]string
 	Discovery   *DiscoveryContext
 	SigmaRule   *SigmaRule
@@ -108,4 +113,32 @@ func (s *SigmaRule) MITRETactics() []string {
 		}
 	}
 	return tactics
+}
+
+// ContentRevision identifies the fetched evidence before enrichment. An explicit
+// revision is preserved across pipeline-owned enrichment and retries.
+func (r RawItem) ContentRevision() string {
+	if r.Revision != "" {
+		return r.Revision
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(r.EvidenceRevision()+"\x00"+r.UpdatedAt.UTC().Format(time.RFC3339Nano))))
+}
+
+// EvidenceRevision ignores delivery clocks. Missing feed dates are synthesized
+// at poll time and must never turn identical evidence into a new AI job.
+func (r RawItem) EvidenceRevision() string {
+	r.Revision = ""
+	r.PublishedAt = time.Time{}
+	r.UpdatedAt = time.Time{}
+	r.Enriched = false
+	b, _ := json.Marshal(r)
+	return fmt.Sprintf("%x", sha256.Sum256(b))
+}
+
+// itemFreshness uses upstream correction time without rewriting publication history.
+func itemFreshness(item RawItem) time.Time {
+	if item.UpdatedAt.After(item.PublishedAt) {
+		return item.UpdatedAt
+	}
+	return item.PublishedAt
 }

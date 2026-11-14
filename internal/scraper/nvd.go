@@ -27,6 +27,10 @@ const (
 	// The awaiting-analysis sweep reads every CVE published in the window, so
 	// it pages; 5 pages cover more than NVD publishes in a typical day.
 	nvdMaxSweepPages = 5
+	// Corrections can concern old publications and need their own bounded sweep.
+	// Hitting this cap is an incomplete poll, so the caller retains its cursor.
+	nvdMaxModifiedPages = 5
+	nvdModifiedPageSize = 2000
 )
 
 // NVD scrapes NIST National Vulnerability Database for high/critical CVEs.
@@ -89,25 +93,55 @@ func (n *NVD) pollFrom(ctx context.Context, since time.Time, apiURL string) ([]R
 	awaiting, err := n.pollAwaitingAnalysis(ctx, apiURL, pubStart, pubEnd)
 	if err != nil {
 		// Non-fatal: keep whatever critical+high already gave us.
-		n.log("awaiting-analysis sweep failed", "err", err)
+		n.log("awaiting-analysis sweep failed", "error", boundedScraperError(err))
 	}
+	modified, modifiedErr := n.pollModified(ctx, apiURL, pubStart, pubEnd)
 
-	seen := make(map[string]bool, len(critical))
-	for _, item := range critical {
-		seen[item.SourceID] = true
-	}
-	for _, item := range high {
-		if !seen[item.SourceID] {
-			critical = append(critical, item)
-			seen[item.SourceID] = true
+	// A record can appear in both date windows. Prefer its newest evidence,
+	// rather than letting the publication pass hide a later correction.
+	var items []RawItem
+	seen := make(map[string]int)
+	for _, batch := range [][]RawItem{critical, high, awaiting, modified} {
+		for _, item := range batch {
+			if i, ok := seen[item.SourceID]; ok {
+				if item.UpdatedAt.After(items[i].UpdatedAt) {
+					items[i] = item
+				}
+				continue
+			}
+			seen[item.SourceID] = len(items)
+			items = append(items, item)
 		}
 	}
-	for _, item := range awaiting {
-		if !seen[item.SourceID] {
-			critical = append(critical, item)
+	if modifiedErr != nil {
+		return items, fmt.Errorf("NVD modified-record sweep incomplete: %w", modifiedErr)
+	}
+	return items, nil
+}
+
+// pollModified uses modification dates without a publication-date restriction:
+// a correction to a years-old CVE still belongs in this polling window. The
+// same score filter as normal ingestion includes secondary-scored records.
+func (n *NVD) pollModified(ctx context.Context, apiURL, start, end string) ([]RawItem, error) {
+	var items []RawItem
+	for page := range nvdMaxModifiedPages {
+		select {
+		case <-ctx.Done():
+			return items, ctx.Err()
+		case <-time.After(n.rateDelay()):
+		}
+		startIndex := page * nvdModifiedPageSize
+		query := fmt.Sprintf("%s?lastModStartDate=%s&lastModEndDate=%s&resultsPerPage=%d&startIndex=%d", apiURL, start, end, nvdModifiedPageSize, startIndex)
+		batch, total, err := n.fetchPageMode(ctx, query, true)
+		if err != nil {
+			return items, err
+		}
+		items = append(items, batch...)
+		if startIndex+nvdModifiedPageSize >= total {
+			return items, nil
 		}
 	}
-	return critical, nil
+	return items, fmt.Errorf("modified-record page limit (%d) reached", nvdMaxModifiedPages)
 }
 
 // pollAwaitingAnalysis reads every non-rejected CVE published in the
@@ -230,6 +264,10 @@ func (n *NVD) fetchItemsFrom(ctx context.Context, apiURL string, sourceIDs []str
 }
 
 func (n *NVD) fetchPage(ctx context.Context, url string) ([]RawItem, int, error) {
+	return n.fetchPageMode(ctx, url, false)
+}
+
+func (n *NVD) fetchPageMode(ctx context.Context, url string, includeCorrections bool) ([]RawItem, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, 0, err
@@ -256,13 +294,19 @@ func (n *NVD) fetchPage(ctx context.Context, url string) ([]RawItem, int, error)
 	for _, vuln := range result.Vulnerabilities {
 		cve := vuln.CVE
 
-		// Filter: only high/critical (CVSS v3.1 baseScore >= 7.0).
+		// A downgrade or retraction must still reach an already-published CVE.
+		// Publication-window ingestion keeps its high/critical threshold.
 		score, scoreStr := n.extractCVSS(cve)
-		if score < 7.0 {
+		correctionOnly := score < 7.0 || strings.EqualFold(cve.VulnStatus, "Rejected")
+		if correctionOnly && !includeCorrections {
 			continue
 		}
 
-		published, _ := time.Parse("2006-01-02T15:04:05.000", cve.Published)
+		published := parseNVDTimestamp(cve.Published)
+		updated := parseNVDTimestamp(cve.LastModified)
+		if updated.IsZero() {
+			updated = published
+		}
 
 		description := n.extractDescription(cve)
 		cpeList := n.extractCPEs(cve)
@@ -280,17 +324,28 @@ func (n *NVD) fetchPage(ctx context.Context, url string) ([]RawItem, int, error)
 		}
 
 		items = append(items, RawItem{
-			SourceID:    fmt.Sprintf("nvd:%s", cve.ID),
-			Source:      "nvd",
-			Title:       fmt.Sprintf("%s — %s", cve.ID, titleDesc),
-			URL:         fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", cve.ID),
-			Content:     strings.Join(contentParts, "\n"),
-			PublishedAt: published,
-			Metadata:    nvdItemMetadata(cve, scoreStr, cpeList),
+			SourceID:          fmt.Sprintf("nvd:%s", cve.ID),
+			Source:            "nvd",
+			Title:             fmt.Sprintf("%s — %s", cve.ID, titleDesc),
+			URL:               fmt.Sprintf("https://nvd.nist.gov/vuln/detail/%s", cve.ID),
+			Content:           strings.Join(contentParts, "\n"),
+			PublishedAt:       published,
+			UpdatedAt:         updated,
+			Metadata:          nvdItemMetadata(cve, scoreStr, cpeList),
+			CorroborationOnly: correctionOnly,
 		})
 	}
 
 	return items, result.TotalResults, nil
+}
+
+func parseNVDTimestamp(value string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 // nvdItemMetadata records NVD's own vendor data (CNA and vulnerable CPEs) on
@@ -303,6 +358,9 @@ func nvdItemMetadata(cve nvdCVE, scoreStr string, cpes []string) map[string]stri
 	}
 	if id := strings.TrimSpace(cve.SourceIdentifier); id != "" {
 		md["source_identifier"] = id
+	}
+	if status := strings.TrimSpace(cve.VulnStatus); status != "" {
+		md["vuln_status"] = status
 	}
 	if len(cpes) > 0 {
 		md["cpes"] = strings.Join(cpes, " ")
@@ -423,6 +481,7 @@ type nvdCVE struct {
 	ID               string             `json:"id"`
 	Published        string             `json:"published"`
 	LastModified     string             `json:"lastModified"`
+	VulnStatus       string             `json:"vulnStatus"`
 	Descriptions     []nvdDescription   `json:"descriptions"`
 	Metrics          *nvdMetrics        `json:"metrics"`
 	Configurations   []nvdConfiguration `json:"configurations"`

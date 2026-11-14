@@ -12,7 +12,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -116,43 +116,44 @@ const publicMarkdownDir = "site/content/briefs/"
 // public Hugo site. Field tags MUST match the keys used by the site's layouts
 // and existing sample briefs (see threat-feed/site/content/briefs/*.md).
 type publicBriefFrontmatter struct {
-	BriefID              string                      `yaml:"brief_id"`
-	EventID              string                      `yaml:"event_id"`
-	Revision             int                         `yaml:"revision"`
-	ActivityAt           string                      `yaml:"activity_at"`
-	RevisionHistory      []BundleRevision            `yaml:"revision_history,omitempty"`
-	Title                string                      `yaml:"title"`
-	Slug                 string                      `yaml:"slug"`
-	Description          string                      `yaml:"description,omitempty"`
-	Date                 string                      `yaml:"date"`
-	Lastmod              string                      `yaml:"lastmod,omitempty"`
-	Type                 string                      `yaml:"type"`
-	ClaimState           string                      `yaml:"claim_state,omitempty"`
-	StatusNotice         string                      `yaml:"status_notice,omitempty"`
-	Types                []string                    `yaml:"types,omitempty"` // taxonomy mirror of Type
-	Severities           []string                    `yaml:"severities"`
-	Actors               []string                    `yaml:"actors,omitempty"`
-	Exploited            bool                        `yaml:"exploited,omitempty"`
-	ExploitationEvidence *BundleExploitationEvidence `yaml:"exploitation_evidence"`
-	SourceAssessment     *publicSourceAssessment     `yaml:"source_assessment,omitempty"`
-	QAStatus             *publicQAStatus             `yaml:"qa_status,omitempty"`
-	CPEs                 []string                    `yaml:"cpes,omitempty"`
-	HasPOC               bool                        `yaml:"has_poc,omitempty"`
-	PocReferences        []string                    `yaml:"poc_references,omitempty"`
-	Tags                 []string                    `yaml:"tags,omitempty"`
-	Vendors              []string                    `yaml:"vendors,omitempty"`
-	Products             []string                    `yaml:"products,omitempty"`
-	ProductVersions      []publicProductVersion      `yaml:"product_versions,omitempty"`
-	AffectedOS           []string                    `yaml:"affected_os,omitempty"`
-	MitreTTPs            []publicTTP                 `yaml:"mitre_ttps,omitempty"`
-	CVEs                 []publicCVE                 `yaml:"cves,omitempty"`
-	References           []string                    `yaml:"references,omitempty"`
-	IOCs                 []publicIOC                 `yaml:"iocs,omitempty"`
-	IOCCounts            map[string]int              `yaml:"ioc_counts,omitempty"`
-	Rules                []publicRule                `yaml:"rules,omitempty"`
-	RulesCount           int                         `yaml:"rules_count,omitempty"`
-	ActionPlan           *BundleActionPlan           `yaml:"action_plan,omitempty"`
-	Updates              []publicUpdate              `yaml:"updates,omitempty"`
+	BriefID              string                              `yaml:"brief_id"`
+	EventID              string                              `yaml:"event_id"`
+	Revision             int                                 `yaml:"revision"`
+	ActivityAt           string                              `yaml:"activity_at"`
+	RevisionHistory      []BundleRevision                    `yaml:"revision_history,omitempty"`
+	Title                string                              `yaml:"title"`
+	Slug                 string                              `yaml:"slug"`
+	Description          string                              `yaml:"description,omitempty"`
+	Date                 string                              `yaml:"date"`
+	Lastmod              string                              `yaml:"lastmod,omitempty"`
+	Type                 string                              `yaml:"type"`
+	ClaimState           string                              `yaml:"claim_state,omitempty"`
+	StatusNotice         string                              `yaml:"status_notice,omitempty"`
+	Types                []string                            `yaml:"types,omitempty"` // taxonomy mirror of Type
+	Severities           []string                            `yaml:"severities"`
+	Actors               []string                            `yaml:"actors,omitempty"`
+	Exploited            bool                                `yaml:"exploited,omitempty"`
+	ExploitationEvidence *BundleExploitationEvidence         `yaml:"exploitation_evidence"`
+	SourceAssessment     *publicSourceAssessment             `yaml:"source_assessment,omitempty"`
+	QAStatus             *publicQAStatus                     `yaml:"qa_status,omitempty"`
+	CPEs                 []string                            `yaml:"cpes,omitempty"`
+	HasPOC               bool                                `yaml:"has_poc,omitempty"`
+	PocReferences        []string                            `yaml:"poc_references,omitempty"`
+	Tags                 []string                            `yaml:"tags,omitempty"`
+	Vendors              []string                            `yaml:"vendors,omitempty"`
+	Products             []string                            `yaml:"products,omitempty"`
+	ProductVersions      []publicProductVersion              `yaml:"product_versions,omitempty"`
+	AffectedOS           []string                            `yaml:"affected_os,omitempty"`
+	MitreTTPs            []publicTTP                         `yaml:"mitre_ttps,omitempty"`
+	CVEVerification      map[string]pipeline.CVEVerification `yaml:"cve_verification,omitempty"`
+	CVEs                 []publicCVE                         `yaml:"cves,omitempty"`
+	References           []string                            `yaml:"references,omitempty"`
+	IOCs                 []publicIOC                         `yaml:"iocs,omitempty"`
+	IOCCounts            map[string]int                      `yaml:"ioc_counts,omitempty"`
+	Rules                []publicRule                        `yaml:"rules,omitempty"`
+	RulesCount           int                                 `yaml:"rules_count,omitempty"`
+	ActionPlan           *BundleActionPlan                   `yaml:"action_plan,omitempty"`
+	Updates              []publicUpdate                      `yaml:"updates,omitempty"`
 }
 
 // publicProductVersion keeps the affected product's queryable canonical name
@@ -336,6 +337,7 @@ func briefToMarkdown(b BundleBrief) ([]byte, error) {
 		PocReferences:        b.PocReferences,
 		MitreTTPs:            convertTTPs(b.TTPs),
 		CVEs:                 convertCVEs(b.CVEs),
+		CVEVerification:      b.CVEVerification,
 		Updates:              convertUpdates(b.UpdateLog),
 		IOCs:                 convertIOCs(b.IOCs),
 		IOCCounts:            countIOCs(b.IOCs),
@@ -456,9 +458,20 @@ func RenderPublicBriefMarkdown(b BundleBrief, existing []byte) (path string, con
 	if err := validatePublicSourceReferences(b); err != nil {
 		return path, nil, b, false, err
 	}
+	// Backfill and maintenance render stored bundles without prepareBrief.
+	// Recheck the exact normalized snapshot so these routes share the same
+	// editorial gate as new, merged, and manually published briefs.
 	b, err = preserveExistingPublicIdentity(b, existing)
 	if err != nil {
 		return path, nil, b, false, err
+	}
+	b.AffectedProducts = pipeline.CleanProductList(b.AffectedProducts)
+	raw, marshalErr := yaml.Marshal(b)
+	if marshalErr != nil {
+		return path, nil, b, false, marshalErr
+	}
+	if issues := pipeline.ValidatePublicationConsistency(string(raw)); len(issues) > 0 {
+		return path, nil, b, false, fmt.Errorf("brief requires editorial review: %s", strings.Join(issues, "; "))
 	}
 	content, err = briefToMarkdown(b)
 	if err != nil {
@@ -586,6 +599,23 @@ func (s *backfillSelection) missing() []string {
 	return missing
 }
 
+// A directory-listed segment is required input for a complete maintenance
+// pass. Treat a concurrent deletion just like a read/decryption failure.
+func (p *Publisher) readMaintenanceSegment(path string) (*SegmentContent, error) {
+	raw, _, err := p.fetchJSONFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("%s: listed segment is missing", path)
+	}
+	segment, err := decodeSegment(raw, p.publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return segment, nil
+}
+
 // BackfillMarkdownSlugs performs the same idempotent reconciliation as
 // BackfillMarkdown, limited to the requested slugs or immutable brief IDs.
 // An empty selection keeps the original full-corpus behavior.
@@ -598,24 +628,16 @@ func (p *Publisher) BackfillMarkdownSlugs(slugs []string) error {
 	sort.Strings(entries)
 
 	totalSuccess, totalFail := 0, 0
+	var failures []error
 	for _, name := range entries {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		segPath := "output/briefs/" + name
-		raw, _, fetchErr := p.fetchJSONFile(segPath)
-		if fetchErr != nil || raw == nil {
-			p.logger.Warn("skipping unreadable segment", "file", name, "err", fetchErr)
-			continue
-		}
-		var enc BundleManifest
-		if jsonErr := json.Unmarshal(raw, &enc); jsonErr != nil {
-			p.logger.Warn("skipping non-manifest segment", "file", name)
-			continue
-		}
-		seg, decErr := DecryptSegment(&enc, p.publicKey)
-		if decErr != nil {
-			p.logger.Warn("skipping undecryptable segment", "file", name, "err", decErr)
+		seg, readErr := p.readMaintenanceSegment(segPath)
+		if readErr != nil {
+			failures = append(failures, readErr)
+			p.logger.Error("backfill segment failed", "file", name, "error", readErr)
 			continue
 		}
 
@@ -625,6 +647,7 @@ func (p *Publisher) BackfillMarkdownSlugs(slugs []string) error {
 				continue
 			}
 			if err := p.publishBriefMarkdown(brief); err != nil {
+				failures = append(failures, fmt.Errorf("%s brief %s: %w", segPath, brief.ID, err))
 				p.logger.Error("backfill: brief failed", "brief", brief.ID, "err", err)
 				segFail++
 			} else {
@@ -636,13 +659,14 @@ func (p *Publisher) BackfillMarkdownSlugs(slugs []string) error {
 		totalSuccess += segSuccess
 		totalFail += segFail
 	}
-	p.logger.Info("backfill complete", "success", totalSuccess, "failed", totalFail)
 	if missing := selection.missing(); len(missing) > 0 {
-		return fmt.Errorf("requested briefs were not found: %s", strings.Join(missing, ", "))
+		failures = append(failures, fmt.Errorf("requested briefs were not found: %s", strings.Join(missing, ", ")))
 	}
-	if totalFail > 0 {
-		return fmt.Errorf("%d brief(s) failed to backfill (see logs); rerun is safe", totalFail)
+	if len(failures) > 0 {
+		p.logger.Error("backfill incomplete", "success", totalSuccess, "failed_briefs", totalFail, "failures", len(failures))
+		return fmt.Errorf("backfill incomplete; rerun is safe: %w", errors.Join(failures...))
 	}
+	p.logger.Info("backfill complete", "success", totalSuccess, "failed", totalFail)
 	return nil
 }
 
@@ -666,20 +690,14 @@ func (p *Publisher) CheckDriftMarkdown() ([]DriftEntry, error) {
 	sort.Strings(entries)
 
 	var drift []DriftEntry
+	var failures []error
 	for _, name := range entries {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		raw, _, fetchErr := p.fetchJSONFile("output/briefs/" + name)
-		if fetchErr != nil || raw == nil {
-			continue
-		}
-		var enc BundleManifest
-		if err := json.Unmarshal(raw, &enc); err != nil {
-			continue
-		}
-		seg, err := DecryptSegment(&enc, p.publicKey)
+		seg, err := p.readMaintenanceSegment("output/briefs/" + name)
 		if err != nil {
+			failures = append(failures, err)
 			continue
 		}
 		for _, brief := range seg.Briefs {
@@ -707,6 +725,9 @@ func (p *Publisher) CheckDriftMarkdown() ([]DriftEntry, error) {
 			}
 		}
 		p.logger.Info("drift segment done", "file", name)
+	}
+	if len(failures) > 0 {
+		return drift, fmt.Errorf("drift check incomplete: %w", errors.Join(failures...))
 	}
 	return drift, nil
 }

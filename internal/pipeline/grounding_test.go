@@ -90,12 +90,12 @@ func TestGroundingChecker_TruncatesLongSource(t *testing.T) {
 	client := llm.NewOllamaClient(srv.URL, "test")
 	checker := NewGroundingChecker(client)
 
-	longContent := make([]byte, 20000)
+	longContent := make([]byte, 30000)
 	for i := range longContent {
 		longContent[i] = 'a'
 	}
 
-	result, err := checker.Check(context.Background(), "Title", string(longContent), "brief yaml")
+	result, err := checker.Check(context.Background(), "Title", string(longContent), "title: Brief")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

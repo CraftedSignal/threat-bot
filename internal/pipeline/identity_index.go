@@ -111,7 +111,7 @@ func (p *Pipeline) quarantineInvalidBrief(item scraper.RawItem, invalid *Invalid
 	if err := p.db.QuarantinePipelineItem(item.SourceID, item.Source, item.Title, invalid.Raw, invalid.Error()); err != nil {
 		return fmt.Errorf("persisting malformed brief quarantine: %w", err)
 	}
-	if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
+	if err := p.markSeen(item); err != nil {
 		return fmt.Errorf("marking quarantined brief seen: %w", err)
 	}
 	p.logger.Warn("quarantined malformed brief after bounded repair", "source_id", item.SourceID, "source", item.Source, "error", invalid.Err)
@@ -123,6 +123,61 @@ func (p *Pipeline) quarantineInvalidBrief(item scraper.RawItem, invalid *Invalid
 // and populates the vendor+product+class fingerprint plus the normalized
 // title (for token-Jaccard sim against future entries).
 func (p *Pipeline) indexContent(draftID string, item scraper.RawItem, regexCVEs []string, extraction *ExtractionResult, briefYAML ...string) {
+	for _, entry := range contentIndexEntries(draftID, item, regexCVEs, extraction, briefYAML...) {
+		if err := p.db.IndexContent(&entry); err != nil {
+			p.logger.Warn("failed to index content", "cve", entry.CVEID, "error", err)
+		}
+	}
+}
+
+func sourceURLHashesForIndexedBrief(item scraper.RawItem, briefYAML ...string) []string {
+	values := []string{item.URL}
+	for _, raw := range briefYAML {
+		var fm map[string]any
+		if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
+			continue
+		}
+		values = append(values, yamlStringList(fm["references"])...)
+	}
+	return SourceURLHashes(values...)
+}
+
+func briefProductFingerprint(briefYAML string) string {
+	var fm map[string]any
+	if err := yaml.Unmarshal([]byte(briefYAML), &fm); err != nil {
+		return ""
+	}
+	return ProductFingerprint(yamlStringList(fm["affected_vendors"]), yamlStringList(fm["affected_products"]))
+}
+
+// indexLowValueCVEs indexes CVEs from a skipped low-value item so that
+// future updates (severity upgrade, exploit disclosure, active exploitation)
+// can trigger the dedup update path instead of being silently dropped.
+func (p *Pipeline) indexLowValueCVEs(item scraper.RawItem, regexCVEs []string) {
+	if len(regexCVEs) == 0 {
+		return
+	}
+	cveCtx := BuildCVEContext(item, nil)
+	ctxJSON, _ := json.Marshal(cveCtx)
+	titleHash := NormalizeTitleHash(item.Title)
+	now := time.Now()
+
+	for _, cve := range regexCVEs {
+		if err := p.db.IndexContent(&storage.ContentIndexEntry{
+			CVEID:      strings.ToUpper(cve),
+			TitleHash:  titleHash,
+			DraftID:    "", // no draft was created
+			SourceID:   item.SourceID,
+			Source:     item.Source,
+			CVEContext: string(ctxJSON),
+			CreatedAt:  now,
+		}); err != nil {
+			p.logger.Warn("failed to index low-value CVE", "cve", cve, "error", err)
+		}
+	}
+}
+
+func contentIndexEntries(draftID string, item scraper.RawItem, regexCVEs []string, extraction *ExtractionResult, briefYAML ...string) []storage.ContentIndexEntry {
 	cveCtx := BuildCVEContext(item, extraction)
 	ctxJSON, _ := json.Marshal(cveCtx)
 	titleHash := NormalizeTitleHash(item.Title)
@@ -173,41 +228,24 @@ func (p *Pipeline) indexContent(draftID string, item scraper.RawItem, regexCVEs 
 		CreatedAt:              now,
 	}
 
+	var entries []storage.ContentIndexEntry
 	if len(allCVEs) == 0 {
-		entry := base
-		if err := p.db.IndexContent(&entry); err != nil {
-			p.logger.Warn("failed to index content", "error", err)
-		}
-		p.indexSourceURLAliases(base, urlHashes)
-		return
-	}
-
-	for cve := range allCVEs {
-		entry := base
-		entry.CVEID = cve
-		if err := p.db.IndexContent(&entry); err != nil {
-			p.logger.Warn("failed to index content", "cve", cve, "error", err)
+		entries = append(entries, base)
+	} else {
+		for cve := range allCVEs {
+			entry := base
+			entry.CVEID = cve
+			entries = append(entries, entry)
 		}
 	}
-	p.indexSourceURLAliases(base, urlHashes)
+	return append(entries, sourceURLAliasEntries(base, urlHashes)...)
 }
 
-func sourceURLHashesForIndexedBrief(item scraper.RawItem, briefYAML ...string) []string {
-	values := []string{item.URL}
-	for _, raw := range briefYAML {
-		var fm map[string]any
-		if err := yaml.Unmarshal([]byte(raw), &fm); err != nil {
-			continue
-		}
-		values = append(values, yamlStringList(fm["references"])...)
-	}
-	return SourceURLHashes(values...)
-}
-
-func (p *Pipeline) indexSourceURLAliases(base storage.ContentIndexEntry, hashes []string) {
+func sourceURLAliasEntries(base storage.ContentIndexEntry, hashes []string) []storage.ContentIndexEntry {
 	if len(hashes) < 2 {
-		return
+		return nil
 	}
+	var entries []storage.ContentIndexEntry
 	seen := map[string]bool{base.SourceURLHash: true}
 	for _, hash := range hashes {
 		if hash == "" || seen[hash] {
@@ -222,43 +260,7 @@ func (p *Pipeline) indexSourceURLAliases(base storage.ContentIndexEntry, hashes 
 			Source:             base.Source,
 			CreatedAt:          base.CreatedAt,
 		}
-		if err := p.db.IndexContent(&entry); err != nil {
-			p.logger.Warn("failed to index source URL alias", "error", err)
-		}
+		entries = append(entries, entry)
 	}
-}
-
-func briefProductFingerprint(briefYAML string) string {
-	var fm map[string]any
-	if err := yaml.Unmarshal([]byte(briefYAML), &fm); err != nil {
-		return ""
-	}
-	return ProductFingerprint(yamlStringList(fm["affected_vendors"]), yamlStringList(fm["affected_products"]))
-}
-
-// indexLowValueCVEs indexes CVEs from a skipped low-value item so that
-// future updates (severity upgrade, exploit disclosure, active exploitation)
-// can trigger the dedup update path instead of being silently dropped.
-func (p *Pipeline) indexLowValueCVEs(item scraper.RawItem, regexCVEs []string) {
-	if len(regexCVEs) == 0 {
-		return
-	}
-	cveCtx := BuildCVEContext(item, nil)
-	ctxJSON, _ := json.Marshal(cveCtx)
-	titleHash := NormalizeTitleHash(item.Title)
-	now := time.Now()
-
-	for _, cve := range regexCVEs {
-		if err := p.db.IndexContent(&storage.ContentIndexEntry{
-			CVEID:      strings.ToUpper(cve),
-			TitleHash:  titleHash,
-			DraftID:    "", // no draft was created
-			SourceID:   item.SourceID,
-			Source:     item.Source,
-			CVEContext: string(ctxJSON),
-			CreatedAt:  now,
-		}); err != nil {
-			p.logger.Warn("failed to index low-value CVE", "cve", cve, "error", err)
-		}
-	}
+	return entries
 }

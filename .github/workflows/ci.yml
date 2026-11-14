@@ -36,6 +36,8 @@ jobs:
           go mod download
           go mod verify
           make format-check test-race vet docs-check licenses-check
+      - name: Required deterministic brief quality corpus
+        run: go test -count=1 ./internal/eval -run '^TestEvalGate$'
       - name: Install pinned linters
         run: |
           GOBIN="$PWD/.tools/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0

@@ -52,6 +52,10 @@ func runScraper() {
 	}
 	defer func() { _ = db.Close() }()
 
+	if err := db.PruneProcessingArtifacts(time.Now().UTC()); err != nil {
+		logger.Warn("pruning completed processing artifacts", "error", err)
+	}
+
 	// LLM clients
 	llmClients, err := buildLLMClients(cfg.LLM, logger)
 	if err != nil {
@@ -66,15 +70,20 @@ func runScraper() {
 		fastLLMClient = llmHealth.Wrap("fast", llmClients.FastModel, llmClients.Fast)
 		llmChecks = append(llmChecks, llmCheck{Role: "fast", Model: llmClients.FastModel, Client: fastLLMClient})
 	}
+	var repairLLMClient llm.Client
+	if llmClients.Repair != nil {
+		repairLLMClient = llmHealth.Wrap("repair", llmClients.RepairModel, llmClients.Repair)
+		llmChecks = append(llmChecks, llmCheck{Role: "repair", Model: llmClients.RepairModel, Client: repairLLMClient})
+	}
 	if err := smokeCheckLLMs(ctx, llmChecks, logger); err != nil {
 		fmt.Fprintf(os.Stderr, "error checking LLM models: %v\n", err)
 		os.Exit(1)
 	}
 	// Keep readiness checks live, then cache only successful runtime structured
 	// calls. Plain-text generation (including brief assembly) is never cached.
-	llmClient = llm.NewCachedClient(llmClient, llmClients.PrimaryModel, db)
+	llmClient = llm.NewCachedClient(llmClient, llmClients.PrimaryModel, db, logger)
 	if fastLLMClient != nil {
-		fastLLMClient = llm.NewCachedClient(fastLLMClient, llmClients.FastModel, db)
+		fastLLMClient = llm.NewCachedClient(fastLLMClient, llmClients.FastModel, db, logger)
 	}
 
 	// Put batch caches outside health monitoring: only actual online requests
@@ -175,6 +184,9 @@ func runScraper() {
 		DB:                     db,
 		LLMClient:              llmClient,
 		FastLLMClient:          fastLLMClient,
+		RepairLLMClient:        repairLLMClient,
+		ProcessingPolicy:       fmt.Sprintf("%s/%s/%s/%s/%s", cfg.LLM.Provider, cfg.LLM.Location, cfg.LLM.Model, cfg.LLM.FastModel, cfg.LLM.RepairModel),
+		RetryBackoff:           cfg.Pipeline.RetryBackoff,
 		SigmaIdx:               sigmaIdx,
 		QualityThreshold:       cfg.Pipeline.QualityThreshold,
 		MaxGroundingAttempts:   cfg.Pipeline.MaxGroundingAttempts,
@@ -251,7 +263,15 @@ func runScraper() {
 		catchUpDigests(ctx, db, pub, &lastDailyDigest, &lastWeeklyDigest, logger)
 	}
 
+	lastArtifactPrune := time.Now()
 	for {
+		if time.Since(lastArtifactPrune) >= 24*time.Hour {
+			if err := db.PruneProcessingArtifacts(time.Now().UTC()); err != nil {
+				logger.Warn("pruning completed processing artifacts", "error", err)
+			} else {
+				lastArtifactPrune = time.Now()
+			}
+		}
 		items, err := runner.PollAll(ctx)
 		if err != nil {
 			if handleLoopError(ctx, logger, "poll error", err) {

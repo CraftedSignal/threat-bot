@@ -393,6 +393,7 @@ type Correlator struct {
 	namer               *clusterNamer
 	logger              *slog.Logger
 	validatePublication func(string) error
+	publishUpdates      bool
 }
 
 // NewCorrelator creates a new Correlator. If llmClient is nil, LLM naming is disabled.
@@ -550,13 +551,13 @@ func (c *Correlator) Run(ctx context.Context) ([]string, error) {
 			continue
 		}
 
-		var brief briefYAML
+		var brief map[string]any
 		if err := yaml.Unmarshal([]byte(d.BriefYAML), &brief); err != nil {
 			c.logger.Warn("failed to parse draft YAML for tag update", "draft_id", d.ID, "error", err)
 			continue
 		}
 
-		brief.Tags = append(brief.Tags, tags...)
+		brief["tags"] = append(yamlStringList(brief["tags"]), tags...)
 
 		out, err := yaml.Marshal(&brief)
 		if err != nil {
@@ -570,7 +571,7 @@ func (c *Correlator) Run(ctx context.Context) ([]string, error) {
 			}
 		}
 
-		if err := c.db.UpdateDraftYAML(d.ID, string(out)); err != nil {
+		if err := c.db.UpdateDraftYAMLWithPublication(d.ID, string(out), c.publishUpdates, false); err != nil {
 			c.logger.Warn("failed to update draft YAML", "draft_id", d.ID, "error", err)
 			continue
 		}

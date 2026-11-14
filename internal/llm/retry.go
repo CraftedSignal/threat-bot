@@ -61,12 +61,14 @@ func retryDo(client *http.Client, req *http.Request) (*http.Response, error) {
 			// Network error — retry if we have attempts left.
 			lastErr = &RequestError{Err: err}
 			if attempt < maxRetryAttempts && isRetryableNetError(err) {
+				logRetry(req.Context(), attempt+2, 0, "network")
 				continue
 			}
 			return nil, lastErr
 		}
 
 		if retryableStatusCodes[resp.StatusCode] && attempt < maxRetryAttempts {
+			logRetry(req.Context(), attempt+2, resp.StatusCode, "http")
 			retryAfter = resp.Header.Get("Retry-After")
 			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("LLM HTTP %d (attempt %d/%d)", resp.StatusCode, attempt+1, maxRetryAttempts+1)

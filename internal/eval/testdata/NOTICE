@@ -20,3 +20,8 @@ provenance.json records original hashes, complete replacement, and new hashes.
 No TRAM source code or original report excerpts are included in this directory.
 ATT&CK is a registered trademark of The MITRE Corporation. Technique identifiers
 refer to MITRE ATT&CK; see https://attack.mitre.org/resources/terms-of-use/.
+
+The brief_quality subdirectory contains a separate original fictional
+publication-contract corpus. See its NOTICE and the current hashes in
+provenance.json. Captured production and third-party advisory artifacts are
+excluded from that corpus.

@@ -65,6 +65,22 @@ severity: low
 	}
 }
 
+func TestCVEEnrichmentPreservesNewScalarIdentityDuringAuthorityOutage(t *testing.T) {
+	v := NewCVEVerifier(nil, nil)
+	v.cache["CVE-2026-1001"] = &CVEMeta{Exists: true, CVSS: 7.5, CachedAt: time.Now()}
+	v.cache["CVE-2026-1002"] = &CVEMeta{Verification: CVEVerification{Status: "unavailable"}, CachedAt: time.Now()}
+	raw := "title: Supported source update\ncves: [CVE-2026-1001, CVE-2026-1002]\ncve_verification:\n  CVE-2026-1002:\n    status: unavailable\n"
+	got, cves := NewCVEEnricher(v).EnrichListedCVEs(raw, map[string]bool{"CVE-2026-1001": true})
+	if len(cves) != 2 || !strings.Contains(got, "id: CVE-2026-1002") || !strings.Contains(got, "status: unavailable") {
+		t.Fatalf("source-supported identity lost during outage: %s", got)
+	}
+	for _, cve := range cves {
+		if cve.ID == "CVE-2026-1002" && cve.CVSS != 0 {
+			t.Fatal("unverified identity gained unsupported CVSS")
+		}
+	}
+}
+
 func TestEnrichBriefWithCVEs_OmitsUnknownCVSS(t *testing.T) {
 	briefYAML := `id: brief-2026-03-30-test
 title: Unknown CVSS
@@ -160,7 +176,7 @@ func TestCVEEnricherAddsFallbackCPEVersionScopeAndPatchActions(t *testing.T) {
 	verifier.cache["CVE-2026-40541"] = &CVEMeta{
 		Exists:      true,
 		CVSS:        9.0,
-		Description: "An improper neutralization of input during web page generation vulnerability in extract domain in Synology Chat Server before 2.4.5-22148 allows remote authenticated users to read or write arbitrary files and conduct denial-of-service attacks in DSM.",
+		Description: "An improper neutralization of input during web page generation vulnerability in extract domain in Synology Chat Server before 2.4.5-22148 allows remote authenticated users to read or write arbitrary files and conduct denial-of-service attacks in DSM. Synology Chat Server is fixed in 2.4.5-22148.",
 	}
 	enricher := NewCVEEnricher(verifier)
 	briefYAML := `id: brief-2026-08-synology-chat-xss
@@ -241,11 +257,17 @@ func TestExtractPatchVersionHintCombinesAffectedRangeAndFixedVersion(t *testing.
 	}
 }
 
-func TestAddVersionRangeUsesVersionWindowForMultiProductBrief(t *testing.T) {
+func TestSourceScopeBindsSeparateFixedVersionToNamedProduct(t *testing.T) {
 	products := []string{"SvelteKit", "Other Product"}
 	text := "SvelteKit versions 2.49.0 through 2.53.2 are affected. Defenders should prioritize updating to SvelteKit version 2.53.3 or later."
 
-	got, changed := addVersionRangeToAffectedProducts(products, "2.49.0-2.53.2", "2.53.3", text)
+	doc := map[string]any{"affected_products": products}
+	hints := supportedProductScope(products, text)
+	changed := applySupportedProductScope(doc, hints)
+	got := yamlStringList(doc["affected_products"])
+	if hints[scopeProductKey("SvelteKit")].FixedVersion != "2.53.3" {
+		t.Fatalf("explicit fixed release lost: %#v", hints)
+	}
 	if !changed {
 		t.Fatal("expected affected product to be scoped")
 	}
@@ -455,7 +477,12 @@ cves:
 		t.Fatalf("kept unverified plain-string CVE dropped: %#v", cves)
 	}
 	_, cves = enricher.Enrich(briefYAML, nil)
-	if cveIDSet(cves)["CVE-2026-77777"] {
-		t.Fatalf("empty keep-set must keep today's behaviour: %#v", cves)
+	if !cveIDSet(cves)["CVE-2026-77777"] {
+		t.Fatalf("source-listed identity must survive propagation delay without a prior keep-set: %#v", cves)
+	}
+	for _, cve := range cves {
+		if cve.ID == "CVE-2026-77777" && (cve.CVSS != 0 || cve.CVSSVector != "") {
+			t.Fatalf("unverified identity must not acquire a source rating: %#v", cve)
+		}
 	}
 }

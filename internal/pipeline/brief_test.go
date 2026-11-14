@@ -49,6 +49,7 @@ const validWindowsPathBriefYAML = `id: brief-2026-10-windows-path
 slug: 2026-10-windows-path
 title: Windows Path Detection
 summary: Detects a Windows binary path.
+content: Review Windows process creation telemetry for the binary path described by the source.
 severity: medium
 published_at: "2026-10-19T08:00:00Z"
 rules:

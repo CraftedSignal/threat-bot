@@ -25,7 +25,7 @@ func (c *Config) ValidateFor(command string) error {
 	case "run":
 		needDB, needLLM = true, true
 		needPublish = c.Pipeline.AutoPublish
-	case "drafts", "sources":
+	case "drafts", "sources", "efficiency":
 		needDB = true
 	case "check-llm":
 		needLLM = true
@@ -34,7 +34,7 @@ func (c *Config) ValidateFor(command string) error {
 	case "digests":
 		needDB = true
 	default:
-		return fmt.Errorf("unknown validation command (use run, drafts, sources, check-llm, publish, bundle, or digests)")
+		return fmt.Errorf("unknown validation command (use run, drafts, sources, check-llm, publish, bundle, digests, or efficiency)")
 	}
 	if needDB && strings.TrimSpace(c.DB.Path) == "" {
 		return fmt.Errorf("db.path is required")

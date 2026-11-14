@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -283,5 +285,54 @@ func TestQualityGate_FallbackClient(t *testing.T) {
 	}
 	if fast.calls != 1 || primary.calls != 1 {
 		t.Fatalf("expected one fast call and one primary fallback call, got fast=%d primary=%d", fast.calls, primary.calls)
+	}
+}
+
+func TestQualityGateRejectsInvalidScores(t *testing.T) {
+	for _, dimension := range []string{"credibility", "actionability", "novelty"} {
+		for _, value := range []float64{0, -1, 5.1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+			t.Run(fmt.Sprintf("%s/%v", dimension, value), func(t *testing.T) {
+				score := QualityScore{Credibility: 5, Actionability: 5, Novelty: 5}
+				switch dimension {
+				case "credibility":
+					score.Credibility = value
+				case "actionability":
+					score.Actionability = value
+				case "novelty":
+					score.Novelty = value
+				}
+				got, pass, err := NewQualityGate(nil, 3).evaluateScore(score)
+				if err == nil || pass || got != 0 {
+					t.Fatalf("invalid score accepted: score=%v pass=%v err=%v", got, pass, err)
+				}
+			})
+		}
+	}
+}
+
+func TestQualityGateFallbackDoesNotRetainPartialFailedScore(t *testing.T) {
+	fast := shutdownStageLLM{generateJSON: func(_ context.Context, _, _ string, out any) error {
+		out.(*QualityScore).Credibility = 5
+		return errors.New("fast output interrupted")
+	}}
+	primary := shutdownStageLLM{generateJSON: func(_ context.Context, _, _ string, out any) error {
+		out.(*QualityScore).Actionability = 5
+		out.(*QualityScore).Novelty = 5
+		return nil
+	}}
+	score, pass, err := NewQualityGateWithFallback(fast, primary, 3, nil).Evaluate(context.Background(), scraper.RawItem{Source: "research"})
+	if err == nil || pass || score != 0 {
+		t.Fatalf("incomplete fallback inherited failed score: score=%v pass=%v err=%v", score, pass, err)
+	}
+}
+
+func TestQualityGateDoesNotDuplicatePendingBatchWork(t *testing.T) {
+	pending := &llm.PendingBatchError{Keys: []string{"quality-pending"}}
+	fast := &qualityMockLLM{err: fmt.Errorf("batch recovery: %w", pending)}
+	primary := &qualityMockLLM{score: QualityScore{Credibility: 5, Actionability: 5, Novelty: 5}}
+	score, pass, err := NewQualityGateWithFallback(fast, primary, 3, nil).Evaluate(context.Background(), scraper.RawItem{Source: "research"})
+	var deferred *llm.PendingBatchError
+	if !errors.As(err, &deferred) || score != 0 || pass || primary.calls != 0 {
+		t.Fatalf("pending work triggered duplicate inference: score=%v pass=%v error=%v primary_calls=%d", score, pass, err, primary.calls)
 	}
 }

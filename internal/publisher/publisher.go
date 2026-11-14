@@ -180,6 +180,9 @@ func (p *Publisher) ValidatePublication(briefYAML string) error {
 }
 
 func (p *Publisher) prepareBrief(briefYAML string) (*BundleBrief, error) {
+	if err := pipeline.ValidateBriefContract(briefYAML); err != nil {
+		return nil, fmt.Errorf("publication contract: %w", err)
+	}
 	if issues := pipeline.ValidatePublicationConsistency(briefYAML); len(issues) > 0 {
 		return nil, fmt.Errorf("brief requires editorial review: %s", strings.Join(issues, "; "))
 	}

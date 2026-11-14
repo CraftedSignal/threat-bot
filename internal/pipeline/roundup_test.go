@@ -437,8 +437,9 @@ func TestRoundupContentEnrichment(t *testing.T) {
 	// Second CVE folds in and appends a new section, without duplicating the first.
 	second := scraper.RawItem{
 		SourceID: "nvd:2", Source: "nvd",
-		Title: "CVE-2026-1001 Windows RCE",
-		URL:   "https://nvd.nist.gov/vuln/detail/CVE-2026-1001",
+		Title:   "CVE-2026-1001 Windows RCE",
+		Content: "Windows Server 2022 versions up to and including 23H2 have a remote code execution vulnerability.",
+		URL:     "https://nvd.nist.gov/vuln/detail/CVE-2026-1001",
 	}
 	secondEx := &ExtractionResult{
 		CVEs:             []string{"CVE-2026-1001"},

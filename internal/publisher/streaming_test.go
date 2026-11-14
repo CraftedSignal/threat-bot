@@ -1448,10 +1448,10 @@ func TestFlushSegmentedPublishesMergedRevisionMetadata(t *testing.T) {
 	repo, p := newFakeFeedRepo(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	key := SegmentKey(now)
-	existing := BundleBrief{ID: "brief-1", Slug: "brief-1", Title: "Old", PublishedAt: now.Format(time.RFC3339)}
+	existing := BundleBrief{ID: "brief-1", Slug: "brief-1", Title: "Old", Content: "The security notice records suspicious process activity for analyst review.", PublishedAt: now.Format(time.RFC3339)}
 	repo.putSegment(t, key, existing)
 	repo.putJSON(t, manifestPath, &SegmentManifest{Version: "v1", Segments: []SegmentEntry{{Path: segmentPath(key), BriefCount: 1}}})
-	p.pending = []BundleBrief{{ID: "brief-1", Slug: "brief-1", Title: "Corrected", PublishedAt: existing.PublishedAt}}
+	p.pending = []BundleBrief{{ID: "brief-1", Slug: "brief-1", Title: "Corrected", Content: existing.Content, PublishedAt: existing.PublishedAt}}
 	if err := p.FlushSegmented(); err != nil {
 		t.Fatal(err)
 	}

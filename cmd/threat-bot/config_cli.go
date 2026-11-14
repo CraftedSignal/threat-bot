@@ -3,10 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/craftedsignal/threat-bot/internal/config"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/craftedsignal/threat-bot/internal/config"
 )
 
 var version = "dev"
@@ -15,7 +16,7 @@ var revision = "unknown"
 func runConfigValidation(args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("config validate", flag.ContinueOnError)
 	flags.SetOutput(output)
-	command := flags.String("command", "run", "Validate requirements for run, check-llm, drafts, sources, publish, bundle, or digests")
+	command := flags.String("command", "run", "Validate requirements for run, check-llm, drafts, sources, publish, bundle, digests, or efficiency")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}

@@ -15,6 +15,42 @@ type SeverityContext struct {
 	WatchlistMatch     bool
 }
 
+// SeverityBasis records who assigned a label and which deterministic rule
+// produced it. Operational urgency and detector priority are not source CVSS.
+type SeverityBasisKind string
+
+const (
+	SeverityOperationalPolicy SeverityBasisKind = "operational_policy"
+	SeveritySourceCVSS        SeverityBasisKind = "source_cvss"
+	SeveritySourceRating      SeverityBasisKind = "source_severity"
+	SeverityModelInference    SeverityBasisKind = "model_inference"
+)
+
+type SeverityBasis struct {
+	Kind      SeverityBasisKind `yaml:"kind" json:"kind"`
+	Value     string            `yaml:"value" json:"value"`
+	Rule      string            `yaml:"rule,omitempty" json:"rule,omitempty"`
+	Source    string            `yaml:"source,omitempty" json:"source,omitempty"`
+	SourceURL string            `yaml:"source_url,omitempty" json:"source_url,omitempty"`
+}
+
+func setSeverityBasis(raw string, basis SeverityBasis) string {
+	var doc map[string]any
+	if yaml.Unmarshal([]byte(raw), &doc) != nil || doc == nil {
+		return raw
+	}
+	basis.Value = stringFromAny(doc["severity"])
+	if basis.Value == "" {
+		return raw
+	}
+	doc["severity_basis"] = basis
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return raw
+	}
+	return string(out)
+}
+
 // NormalizeOperationalSeverity caps low-urgency CVE advisories after CVE
 // enrichment. Source authority is intentionally not an input: it establishes
 // trust, but it should not promote low-impact issues.
@@ -31,6 +67,7 @@ func NormalizeOperationalSeverity(briefYAML string, ctx SeverityContext) (string
 
 	if low, reason := isLowUrgencyCVE(ctx); low {
 		doc["severity"] = "low"
+		doc["severity_basis"] = SeverityBasis{Kind: SeverityOperationalPolicy, Value: "low", Rule: "low-urgency-cve/v1"}
 		out, err := yaml.Marshal(doc)
 		if err != nil {
 			return briefYAML, nil

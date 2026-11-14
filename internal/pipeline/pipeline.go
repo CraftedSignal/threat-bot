@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,7 +35,10 @@ func (p *Pipeline) queueDraftPublication(briefYAML, draftID, claimKey string) er
 	if !ok {
 		return fmt.Errorf("publisher does not support committed draft completion")
 	}
-	return pub.PublishDraft(briefYAML, draftID, claimKey)
+	if err := pub.PublishDraft(briefYAML, draftID, claimKey); err != nil {
+		return err
+	}
+	return p.db.DeletePublicationIntent(draftID, briefYAML)
 }
 
 // BriefRetirementPublisher atomically removes superseded public identities
@@ -57,6 +61,8 @@ type Pipeline struct {
 	cveEnricher            *CVEEnricher
 	grounding              *GroundingChecker
 	maxGroundingAttempts   int
+	processingPolicy       string
+	retryBackoff           time.Duration
 	enricher               *ContentEnricher
 	watchlistMu            sync.RWMutex
 	watchlist              *Watchlist
@@ -82,12 +88,15 @@ type Pipeline struct {
 type Config struct {
 	DB               *storage.DB
 	LLMClient        llm.Client // main model for brief assembly
+	RepairLLMClient  llm.Client // optional dedicated grounding repair model
 	FastLLMClient    llm.Client // fast model for quality gate (nil = use main)
 	SigmaIdx         *sigma.Index
 	QualityThreshold float64
 	// MaxGroundingAttempts quarantines an item after this many failed
 	// grounding passes. <= 0 uses defaultMaxGroundingAttempts.
 	MaxGroundingAttempts   int
+	ProcessingPolicy       string             // configured model identities; invalidates durable candidates
+	RetryBackoff           time.Duration      // zero defaults to 15m; negative disables delays for deterministic tests
 	TrustedSources         []string           // deprecated: use SourceConfidence instead
 	SourceConfidence       map[string]float64 // per-source confidence multiplier (0.0-1.0)
 	SourceSignalThresholds map[string]int     // opt-in deterministic pre-LLM gate by source
@@ -279,12 +288,20 @@ func New(cfg Config) *Pipeline {
 	if cfg.EnableCorrelation && cfg.DB != nil {
 		correlator = NewCorrelator(cfg.DB, cfg.LLMClient, cfg.Logger)
 		if cfg.AutoPublish && cfg.Publisher != nil {
+			correlator.publishUpdates = true
 			if validator, ok := cfg.Publisher.(interface{ ValidatePublication(string) error }); ok {
 				correlator.validatePublication = validator.ValidatePublication
 			}
 		}
 	}
 
+	policyConfig, _ := json.Marshal(struct {
+		Models            string
+		Threshold         float64
+		Confidence        map[string]float64
+		Signals           map[string]int
+		Roundup, Campaign bool
+	}{cfg.ProcessingPolicy, cfg.QualityThreshold, confidence, cfg.SourceSignalThresholds, cfg.RoundupConsolidation, cfg.CampaignConsolidation})
 	return &Pipeline{
 		db:                     cfg.DB,
 		dedup:                  NewDeduplicator(cfg.DB, cfg.Logger),
@@ -296,8 +313,10 @@ func New(cfg Config) *Pipeline {
 		iocVerifier:            NewIOCVerifier(),
 		cveVerifier:            cveVerifier,
 		cveEnricher:            cveEnricher,
-		grounding:              NewGroundingChecker(cfg.LLMClient).WithLogger(cfg.Logger),
+		grounding:              NewGroundingChecker(cfg.LLMClient).WithLogger(cfg.Logger).WithRepairClient(cfg.RepairLLMClient),
 		maxGroundingAttempts:   groundingAttemptLimit(cfg.MaxGroundingAttempts),
+		processingPolicy:       string(policyConfig),
+		retryBackoff:           configuredRetryBackoff(cfg.RetryBackoff),
 		enricher:               NewContentEnricher(),
 		correlator:             correlator,
 		watchlist:              cfg.Watchlist,
@@ -324,6 +343,10 @@ func New(cfg Config) *Pipeline {
 const flushBatchSize = 25
 
 func (p *Pipeline) Process(ctx context.Context, items []scraper.RawItem) error {
+	recoveryErr := p.recoverPublicationIntents()
+	if recoveryErr != nil {
+		p.logger.Error("publication recovery deferred", "error", recoveryErr)
+	}
 	published := 0
 	for start := 0; start < len(items); start += prefetchChunkSize {
 		chunk := append([]scraper.RawItem(nil), items[start:min(start+prefetchChunkSize, len(items))]...)
@@ -360,10 +383,8 @@ func (p *Pipeline) Process(ctx context.Context, items []scraper.RawItem) error {
 		} else if len(updatedYAMLs) > 0 {
 			p.logger.Info("correlation complete", "briefs_updated", len(updatedYAMLs))
 			if p.autoPublish && p.publisher != nil {
-				for _, yml := range updatedYAMLs {
-					if pubErr := p.publisher.Publish(yml); pubErr != nil {
-						p.logger.Error("failed to re-publish correlated brief", "error", pubErr)
-					}
+				if pubErr := p.recoverPublicationIntents(); pubErr != nil {
+					p.logger.Error("failed to queue durable correlated publications", "error", pubErr)
 				}
 			}
 		}
@@ -376,7 +397,7 @@ func (p *Pipeline) Process(ctx context.Context, items []scraper.RawItem) error {
 		}
 	}
 
-	return nil
+	return recoveryErr
 }
 
 // finishShutdown releases batch state and publishes work completed before the
@@ -492,4 +513,41 @@ func isActionableBrief(briefYAML string) bool {
 		}
 	}
 	return false
+}
+
+func (p *Pipeline) refreshSourceEvidence(ctx context.Context, item scraper.RawItem) (scraper.RawItem, error) {
+	var refreshErrors []error
+	if p.socialProvider != nil && (item.Discovery != nil || containsXStatusReference(item.URL+" "+item.Content)) {
+		item = scraper.EnrichSocialContext(ctx, p.socialProvider, item, p.socialThreadDepth)
+		if item.Discovery != nil && !item.Discovery.ContextComplete {
+			refreshErrors = append(refreshErrors, fmt.Errorf("social context refresh incomplete"))
+			p.logger.Warn("social context provider failed or returned incomplete thread", "source_id", item.SourceID, "url", item.URL)
+		}
+		if item.Discovery != nil {
+			if item.Metadata == nil {
+				item.Metadata = map[string]string{}
+			}
+			provenance := []string{item.Discovery.OriginalURL, item.Discovery.DiscoveryURL}
+			provenance = append(provenance, item.Discovery.ParentURLs...)
+			provenance = append(provenance, item.Discovery.QuoteURLs...)
+			for i, raw := range provenance {
+				if strings.TrimSpace(raw) == "" {
+					continue
+				}
+				item.Metadata[fmt.Sprintf("reference_url_social_%03d", i)] = raw
+			}
+		}
+	}
+
+	// Enrich thin content before quality gate so scoring sees full article.
+	origLen := len(item.Content)
+	for _, enrichmentErr := range p.enricher.Enrich(ctx, &item) {
+		refreshErrors = append(refreshErrors, enrichmentErr)
+		p.logger.Warn("source enrichment unavailable", "source_id", item.SourceID, "source", item.Source, "error", enrichmentErr)
+	}
+	if len(item.Content) > origLen {
+		p.logger.Debug("content enriched", "source_id", item.SourceID, "before", origLen, "after", len(item.Content))
+	}
+
+	return item, errors.Join(refreshErrors...)
 }

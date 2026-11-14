@@ -101,10 +101,16 @@ func (d *DB) ReseedSource(source string, since time.Time, sourceID string) (int6
 	if sourceID != "" {
 		res, err = tx.Exec("DELETE FROM seen_items WHERE source = ? AND source_id = ?", source, sourceID)
 		if err == nil {
-			_, err = tx.Exec("DELETE FROM grounding_attempts WHERE source_id = ?", sourceID)
+			_, err = tx.Exec("DELETE FROM processing_checkpoints WHERE source_id = ?", sourceID)
+			if err == nil {
+				_, err = tx.Exec("DELETE FROM grounding_attempts WHERE source_id = ?", sourceID)
+			}
 		}
 	} else {
-		_, err = tx.Exec("DELETE FROM grounding_attempts WHERE source_id IN (SELECT source_id FROM seen_items WHERE source = ? AND seen_at >= ?)", source, since)
+		_, err = tx.Exec("DELETE FROM processing_checkpoints WHERE source_id IN (SELECT source_id FROM seen_items WHERE source = ? AND seen_at >= ?)", source, since)
+		if err == nil {
+			_, err = tx.Exec("DELETE FROM grounding_attempts WHERE source_id IN (SELECT source_id FROM seen_items WHERE source = ? AND seen_at >= ?)", source, since)
+		}
 		if err == nil {
 			res, err = tx.Exec("DELETE FROM seen_items WHERE source = ? AND seen_at >= ?", source, since)
 		}
@@ -136,6 +142,9 @@ func (d *DB) QueueReplay(source, sourceID, itemJSON string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec("DELETE FROM seen_items WHERE source = ? AND source_id = ?", source, sourceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM processing_checkpoints WHERE source_id = ?", sourceID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM grounding_attempts WHERE source_id = ?", sourceID); err != nil {

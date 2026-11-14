@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type VertexAIClient struct {
 	location   string
 	model      string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // NewVertexAIClient creates a Vertex AI client using Application Default Credentials.
@@ -59,6 +61,11 @@ func newVertexAIClientWithHTTP(project, location, model string, hc *http.Client)
 		model:      model,
 		httpClient: hc,
 	}
+}
+
+func (c *VertexAIClient) WithLogger(logger *slog.Logger) *VertexAIClient {
+	c.logger = loggerOrDefault(logger)
+	return c
 }
 
 func (c *VertexAIClient) generateURL() string {
@@ -175,7 +182,18 @@ func (c *VertexAIClient) doGenerate(ctx context.Context, req vertexRequest) (str
 	return structuredText(resp)
 }
 
-func (c *VertexAIClient) doRequest(ctx context.Context, req vertexRequest) (vertexResponse, error) {
+func (c *VertexAIClient) doRequest(ctx context.Context, req vertexRequest) (result vertexResponse, requestErr error) {
+	start := time.Now()
+	defer func() {
+		err := requestErr
+		if err == nil {
+			_, err = structuredText(result)
+		}
+		logUsage(ctx, c.logger, c.model, "online", requestKey(req), result, time.Since(start), err)
+	}()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return vertexResponse{}, err
@@ -185,6 +203,7 @@ func (c *VertexAIClient) doRequest(ctx context.Context, req vertexRequest) (vert
 		return vertexResponse{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq = httpReq.WithContext(context.WithValue(httpReq.Context(), retryTelemetryKey{}, retryTelemetry{Logger: c.logger, Model: c.model, RequestKey: requestKey(req)}))
 
 	resp, err := retryDo(c.httpClient, httpReq)
 	if err != nil {
@@ -197,7 +216,6 @@ func (c *VertexAIClient) doRequest(ctx context.Context, req vertexRequest) (vert
 		return vertexResponse{}, &HTTPError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
-	var result vertexResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return vertexResponse{}, fmt.Errorf("decoding LLM response: %w", &RequestError{Err: err})
 	}
@@ -244,8 +262,28 @@ type vertexGenerationConfig struct {
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 }
 
+func (r *vertexResponse) UnmarshalJSON(data []byte) error {
+	type plain vertexResponse
+	var value plain
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*r = vertexResponse(value)
+	raw, ok := fields["usageMetadata"]
+	r.UsagePresent = ok && string(raw) != "null"
+	return nil
+}
+
 type vertexResponse struct {
-	Candidates []vertexCandidate `json:"candidates"`
+	Candidates   []vertexCandidate `json:"candidates"`
+	ResponseID   string            `json:"responseId,omitempty"`
+	ModelVersion string            `json:"modelVersion,omitempty"`
+	UsagePresent bool              `json:"-"`
+	Usage        tokenUsage        `json:"usageMetadata"`
 }
 
 type vertexCandidate struct {

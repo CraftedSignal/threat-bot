@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/craftedsignal/threat-bot/internal/llm"
+
 	"github.com/craftedsignal/threat-bot/internal/scraper"
 	"github.com/craftedsignal/threat-bot/internal/storage"
 
@@ -188,18 +190,23 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	if err := injectUpdateMetadata(&merged, draft, event); err != nil {
 		p.logger.Warn("inject assembled update metadata failed", "draft_id", draftID, "error", err)
 	}
+	if preferIncomingNarrative {
+		if err := p.validatePublication(merged); err != nil {
+			return fmt.Errorf("rebuilt canonical brief requires editorial review: %w", err)
+		}
+	}
 	if p.autoPublish && p.publisher != nil {
 		held, err := p.holdMergedBriefForReview(draftID, item, merged)
 		if err != nil || held {
 			return err
 		}
 	}
-	if err := p.db.RecordDraftUpdateWithSource(draftID, merged, event, item.SourceID); err != nil {
+	if err := p.db.RecordDraftUpdateWithPublication(draftID, merged, event, item.SourceID, p.autoPublish && p.publisher != nil); err != nil {
 		return err
 	}
 	if p.autoPublish && p.publisher != nil {
-		if err := p.publisher.Publish(merged); err != nil {
-			p.logger.Error("auto-publish assembled merged brief failed", "draft_id", draftID, "error", err)
+		if err := p.enqueuePublicationIntent(storage.PublicationIntent{DraftID: draftID, BriefYAML: merged}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -224,7 +231,10 @@ func (p *Pipeline) logMergeFailure(msg string, err error, args ...any) {
 
 func (p *Pipeline) mergeIntoDraft(ctx context.Context, draftID string, extraction *ExtractionResult, item scraper.RawItem) error {
 	if err := p.unionIntoDraft(ctx, draftID, extraction, item); err != nil {
-		return err
+		if errors.Is(err, errMergeNotRelevant) || errors.Is(err, errNonAuthoritativeRoundupSource) || errors.Is(err, errMergeRelevanceUnavailable) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errMergeRelevanceUnavailable, err)
 	}
 	p.decisions.record(outcomeMerged)
 	return nil
@@ -325,6 +335,13 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 		extraction = sanitizeCampaignExtraction(extraction)
 	}
 
+	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, extraction)
+	if err != nil {
+		return fmt.Errorf("%w: incoming claims could not be verified: %w", errMergeRelevanceUnavailable, err)
+	}
+	if !delta.Grounded {
+		return fmt.Errorf("%w: incoming claims unsupported: %s", errMergeRelevanceUnavailable, strings.Join(delta.Issues, "; "))
+	}
 	pre := snapshotBriefSignals(fm)
 	lifecycleChanged := mergeRumourLifecycle(fm, extraction)
 
@@ -472,12 +489,12 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 			return err
 		}
 	}
-	if err := p.db.RecordDraftUpdateWithSource(draftID, merged, event, item.SourceID); err != nil {
+	if err := p.db.RecordDraftUpdateWithPublication(draftID, merged, event, item.SourceID, p.autoPublish && p.publisher != nil); err != nil {
 		return err
 	}
 	if p.autoPublish && p.publisher != nil {
-		if err := p.publisher.Publish(merged); err != nil {
-			p.logger.Error("auto-publish updated brief failed", "draft_id", draftID, "error", err)
+		if err := p.enqueuePublicationIntent(storage.PublicationIntent{DraftID: draftID, BriefYAML: merged}); err != nil {
+			return err
 		}
 	}
 	// L3 events earn an "update" dispatch to opted-in subscribers,
@@ -539,7 +556,7 @@ func (p *Pipeline) holdMergedBriefForReview(draftID string, item scraper.RawItem
 	if err := p.db.QuarantinePipelineItem(item.SourceID, item.Source, item.Title, merged, reason); err != nil {
 		return false, err
 	}
-	if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
+	if err := p.markSeen(item); err != nil {
 		return false, err
 	}
 	p.logger.Warn("merged brief held for editorial review", "draft_id", draftID, "source_id", item.SourceID, "issues", issues)

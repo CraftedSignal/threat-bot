@@ -233,6 +233,7 @@ Content:
 - Include an attack chain only when the source documents actual stages.
 - Include impact details only when the source supports them.
 - Recommendation MUST contain specific, prioritized actions tied to the threat
+- Every CVE notice MUST include a nonempty Recommendation section or an evidence-backed action_plan, even when the source is only a short registry entry. State unknown fixes or prerequisites explicitly; never invent them. A CVE description copied into content without defender guidance is incomplete.
 - Each recommendation must reference a sourced artifact, affected product,
   announced release, or concrete operational action supported by the source.
 - Do NOT use vague language like "various techniques" or "multiple organizations"
@@ -463,6 +464,7 @@ Threat actor (threat_actor):
 Affected assets (affected_vendors / affected_products / affected_os):
 - affected_vendors: canonical vendor names of the affected software (e.g. "Microsoft", "Cisco", "Fortinet", "Atlassian"). No version numbers. Use the most common corporate name for the vendor; do not use product or project names as vendors (e.g., use "Flowise", not "FlowiseAI").
 - affected_products: specific product / software names that are vulnerable or targeted (e.g. "Exchange Server 2019", "FortiOS 7.4", "Confluence Data Center"). Include a parenthesized affected version/range when the source names it, for example "Synology Chat Server (< 2.4.5-22148)" or "SvelteKit (2.49.0-2.53.2)". Keep the product name itself canonical and put version detail in parentheses.
+- Use the recognizable product name in affected_products; omit marketplace taglines and pipe-separated feature lists. For example, use "Optimole (<= 4.2.19)" instead of its image optimization marketing title.
 - cpes: CPE 2.3 URIs for affected software when the source or authoritative CVE metadata provides them. Omit this field rather than guessing from weak context.
 - Do not repeat the vendor name inside the product name (e.g., use "Flowise" not "FlowiseAI Flowise").
 - For sub-components or nodes of a product (e.g. "CSVAgent" in Flowise), prefer the parent product name unless the vulnerability is strictly limited to a clearly distinct, separately distributed component.
@@ -783,7 +785,7 @@ func normalizeBriefTitle(title string, item scraper.RawItem, extraction *Extract
 		}
 	}
 	if extraction != nil {
-		products := CleanAffectedList(extraction.AffectedProducts)
+		products := CleanProductList(extraction.AffectedProducts)
 		if len(products) == 1 {
 			if cve := publicationCVERe.FindString(cleaned); cve != "" && strings.EqualFold(cleaned[:len(cve)], cve) {
 				remainder := strings.TrimLeft(strings.TrimSpace(cleaned[len(cve):]), ":- ")

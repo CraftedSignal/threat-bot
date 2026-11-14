@@ -59,6 +59,10 @@ func TestNVD_Poll(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("lastModStartDate") {
+			json.NewEncoder(w).Encode(nvdResponse{})
+			return
+		}
 		json.NewEncoder(w).Encode(response)
 	}))
 	defer srv.Close()
@@ -149,6 +153,10 @@ func fakeNVD(t *testing.T, sweep []nvdVulnerability) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		if q.Has("lastModStartDate") {
+			json.NewEncoder(w).Encode(nvdResponse{})
+			return
+		}
 		if q.Has("isVulnerable") && q.Get("cpeName") == "" {
 			w.Header().Set("message", "The cpeName parameter must have a value when isVulnerable is used.")
 			w.WriteHeader(http.StatusNotFound)
@@ -215,5 +223,139 @@ func TestNVD_PollSweepPagesThroughResults(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].Metadata["cve"] != "CVE-2026-31431" {
 		t.Fatalf("expected the high CVE from the second sweep page, got %+v", items)
+	}
+}
+
+func TestNVDPollIncludesOlderModifiedCVEAndPrefersUpdatedRecord(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	since := now.Add(-time.Hour)
+	old := secondaryScoredCVE("CVE-2024-4242", now.AddDate(-2, 0, 0), 8.1)
+	old.CVE.LastModified = now.Add(-5 * time.Minute).Format("2006-01-02T15:04:05.000")
+	old.CVE.Descriptions[0].Value = "Corrected affected version from vendor advisory"
+	duplicate := secondaryScoredCVE("CVE-2026-4243", now.Add(-30*time.Minute), 9.8)
+	duplicate.CVE.LastModified = now.Add(-20 * time.Minute).Format("2006-01-02T15:04:05.000")
+	updated := duplicate
+	updated.CVE.Descriptions = []nvdDescription{{Lang: "en", Value: "Newly corrected advisory content"}}
+	updated.CVE.LastModified = now.Add(-time.Minute).Format("2006-01-02T15:04:05.000")
+	modifiedRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Has("lastModStartDate") {
+			modifiedRequests++
+			if q.Has("pubStartDate") || q.Has("pubEndDate") {
+				t.Error("modified query must not require recent publication")
+			}
+			if q.Get("lastModStartDate") != since.Format("2006-01-02T15:04:05.000") || q.Get("lastModEndDate") == "" || q.Has("noRejected") {
+				t.Errorf("modified window filters = %v", q)
+			}
+			json.NewEncoder(w).Encode(nvdResponse{TotalResults: 2, Vulnerabilities: []nvdVulnerability{old, updated}})
+			return
+		}
+		json.NewEncoder(w).Encode(nvdResponse{TotalResults: 1, Vulnerabilities: []nvdVulnerability{duplicate}})
+	}))
+	defer srv.Close()
+	items, err := (&NVD{client: srv.Client(), pageDelay: time.Millisecond}).pollFrom(context.Background(), since, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modifiedRequests != 1 || len(items) != 2 {
+		t.Fatalf("modified requests=%d items=%+v; want one modified query and both CVEs", modifiedRequests, items)
+	}
+	byID := map[string]RawItem{}
+	for _, item := range items {
+		byID[item.SourceID] = item
+	}
+	if got := byID["nvd:CVE-2024-4242"]; !got.PublishedAt.Equal(now.AddDate(-2, 0, 0)) || !got.UpdatedAt.Equal(now.Add(-5*time.Minute)) {
+		t.Fatalf("old modified CVE dates not preserved: %+v", got)
+	}
+	if got := byID["nvd:CVE-2026-4243"]; !strings.Contains(got.Content, "Newly corrected") || !got.UpdatedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("publication query hid newer correction: %+v", got)
+	}
+}
+
+func TestNVDModifiedSweepPagesAndPreservesCorrectionScores(t *testing.T) {
+	now := time.Now().UTC()
+	var queried []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if !q.Has("lastModStartDate") {
+			json.NewEncoder(w).Encode(nvdResponse{})
+			return
+		}
+		queried = append(queried, q.Get("startIndex"))
+		var page []nvdVulnerability
+		if q.Get("startIndex") == "0" {
+			for i := range 2000 {
+				page = append(page, secondaryScoredCVE(fmt.Sprintf("CVE-2024-7%04d", i), now.AddDate(-1, 0, 0), 3.1))
+			}
+		} else {
+			page = []nvdVulnerability{secondaryScoredCVE("CVE-2024-31431", now.AddDate(-1, 0, 0), 7.8)}
+		}
+		json.NewEncoder(w).Encode(nvdResponse{TotalResults: 2001, Vulnerabilities: page})
+	}))
+	defer srv.Close()
+	items, err := (&NVD{client: srv.Client(), pageDelay: time.Millisecond}).pollFrom(context.Background(), now.Add(-time.Hour), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(queried, []string{"0", "2000"}) || len(items) != 2001 || items[len(items)-1].SourceID != "nvd:CVE-2024-31431" {
+		t.Fatalf("modified pages=%v items=%+v", queried, items)
+	}
+	for _, item := range items[:2000] {
+		if !item.CorroborationOnly {
+			t.Fatal("low-score modified record may open a new brief")
+		}
+	}
+}
+
+func TestNVDModifiedSweepRetainsDowngradesAndRetractions(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.URL.Query().Has("lastModStartDate") {
+			json.NewEncoder(w).Encode(nvdResponse{})
+			return
+		}
+		if r.URL.Query().Has("noRejected") || r.URL.Query().Has("cvssV3Severity") {
+			t.Errorf("correction query filters retractions: %s", r.URL.RawQuery)
+		}
+		fmt.Fprintf(w, `{"totalResults":2,"vulnerabilities":[{"cve":{"id":"CVE-2024-4242","published":"2024-01-01T00:00:00.000","lastModified":%q,"vulnStatus":"Modified","descriptions":[{"lang":"en","value":"Vendor corrects impact to a low severity information disclosure."}],"metrics":{"cvssMetricV31":[{"cvssData":{"baseScore":3.1}}]}}},{"cve":{"id":"CVE-2024-4243","published":"2024-01-01T00:00:00.000","lastModified":%q,"vulnStatus":"Rejected","descriptions":[{"lang":"en","value":"This CVE record has been rejected by its CNA."}],"metrics":{"cvssMetricV31":[{"cvssData":{"baseScore":9.8}}]}}}]}`, now.Format("2006-01-02T15:04:05.000"), now.Format("2006-01-02T15:04:05.000"))
+	}))
+	defer srv.Close()
+	items, err := (&NVD{client: srv.Client(), pageDelay: time.Millisecond}).pollFrom(context.Background(), now.Add(-time.Hour), srv.URL)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("corrections missing: items=%+v err=%v", items, err)
+	}
+	for _, item := range items {
+		if !item.CorroborationOnly || !item.UpdatedAt.Equal(now) || item.Metadata["vuln_status"] == "" {
+			t.Fatalf("unsafe correction metadata: %+v", item)
+		}
+	}
+}
+
+func TestNVDModifiedSweepFailureCannotReportCompletePoll(t *testing.T) {
+	for _, mode := range []string{"http-error", "page-cap"} {
+		t.Run(mode, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !r.URL.Query().Has("lastModStartDate") {
+					json.NewEncoder(w).Encode(nvdResponse{})
+					return
+				}
+				requests++
+				if mode == "http-error" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				json.NewEncoder(w).Encode(nvdResponse{TotalResults: 10001})
+			}))
+			defer srv.Close()
+			_, err := (&NVD{client: srv.Client(), pageDelay: time.Millisecond}).pollFrom(context.Background(), time.Now().Add(-time.Hour), srv.URL)
+			if err == nil || !strings.Contains(err.Error(), "modified") {
+				t.Fatalf("incomplete modified sweep reported success: %v", err)
+			}
+			if requests == 0 || requests > 5 {
+				t.Fatalf("modified request count=%d, want bounded 1..5", requests)
+			}
+		})
 	}
 }

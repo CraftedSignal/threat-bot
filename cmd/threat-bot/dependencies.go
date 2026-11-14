@@ -29,6 +29,9 @@ func runCheckLLM() {
 	if clients.Fast != nil {
 		checks = append(checks, llmCheck{Role: "fast", Model: clients.FastModel, Client: clients.Fast})
 	}
+	if clients.Repair != nil {
+		checks = append(checks, llmCheck{Role: "repair", Model: clients.RepairModel, Client: clients.Repair})
+	}
 	if err := smokeCheckLLMs(context.Background(), checks, logger); err != nil {
 		fmt.Fprintf(os.Stderr, "LLM smoke check failed: %v\n", err)
 		os.Exit(1)
@@ -70,6 +73,8 @@ type llmClientSet struct {
 	PrimaryModel string
 	Fast         llm.Client
 	FastModel    string
+	Repair       llm.Client
+	RepairModel  string
 }
 
 type llmCheck struct {
@@ -83,6 +88,9 @@ func buildLLMClients(cfg config.LLMConfig, logger *slog.Logger) (llmClientSet, e
 	if err != nil {
 		return llmClientSet{}, fmt.Errorf("creating primary LLM client: %w", err)
 	}
+	if vertex, ok := primary.(*llm.VertexAIClient); ok {
+		vertex.WithLogger(logger)
+	}
 	clients := llmClientSet{
 		Primary:      primary,
 		PrimaryModel: cfg.Model,
@@ -92,11 +100,24 @@ func buildLLMClients(cfg config.LLMConfig, logger *slog.Logger) (llmClientSet, e
 		if err != nil {
 			return llmClientSet{}, fmt.Errorf("creating fast LLM client: %w", err)
 		}
+		if vertex, ok := fast.(*llm.VertexAIClient); ok {
+			vertex.WithLogger(logger)
+		}
 		clients.Fast = fast
 		clients.FastModel = cfg.FastModel
 		if logger != nil {
 			logger.Info("using fast model for quality gate", "model", cfg.FastModel)
 		}
+	}
+	if cfg.RepairModel != "" && cfg.RepairModel != cfg.Model {
+		repair, err := newLLMClient(cfg, cfg.RepairModel)
+		if err != nil {
+			return llmClientSet{}, fmt.Errorf("creating repair LLM client: %w", err)
+		}
+		if vertex, ok := repair.(*llm.VertexAIClient); ok {
+			vertex.WithLogger(logger)
+		}
+		clients.Repair, clients.RepairModel = repair, cfg.RepairModel
 	}
 	return clients, nil
 }

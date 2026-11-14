@@ -43,6 +43,7 @@ func TestReplayReemitsQueuedItemsUntilSeen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want.Revision = want.ContentRevision()
 	if len(items) != 1 || !reflect.DeepEqual(items[0], want) {
 		t.Fatalf("replayed items = %+v, want [%+v]", items, want)
 	}

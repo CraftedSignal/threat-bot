@@ -7,67 +7,50 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// injectAffectedRanges renders the version ranges the source states into the
-// brief's affected_products, so they never depend on the LLM copying them. Two
-// deterministic inputs are merged: every version of a "before X and Y" phrase
-// in the item content, and the per-product ranges the NVD scraper stored in
-// Metadata["affected_ranges"]. Versions already present in a product entry are
-// not added again, so the injection is idempotent.
+// injectAffectedRanges adds only product-specific, unambiguous source scope.
+// Removed scope from a grounding repair is never reintroduced automatically.
 func injectAffectedRanges(briefYAML string, item scraper.RawItem) string {
-	products := nonEmptyTrimmed(yamlStringListFromBrief(briefYAML, "affected_products"))
-	if len(products) == 0 {
+	var doc map[string]any
+	if yaml.Unmarshal([]byte(briefYAML), &doc) != nil {
 		return briefYAML
 	}
-	before := extractBeforeVersions(item.Content)
-	metaRanges := parseAffectedRangeLines(item.Metadata["affected_ranges"])
-	if len(before) == 0 && len(metaRanges) == 0 {
-		return briefYAML
-	}
-
-	out := append([]string(nil), products...)
-	changed := false
-	for i, product := range out {
-		var add []string
-		for _, v := range before {
-			if len(out) > 1 && !productVersionHintApplies(product, v, item.Content) {
-				continue
+	products := nonEmptyTrimmed(yamlStringList(doc["affected_products"]))
+	hints := supportedProductScope(products, item.Content)
+	ambiguous := map[string]bool{}
+	if item.Source == "nvd" || item.Source == "ghsa" {
+		for _, mr := range parseAffectedRangeLines(item.Metadata["affected_ranges"]) {
+			var matches []string
+			for _, product := range products {
+				if productMatchesRangeName(product, mr.name) {
+					matches = append(matches, product)
+				}
 			}
-			if strings.Contains(strings.ToLower(product), strings.ToLower(v)) {
-				continue
+			if len(matches) == 1 {
+				key := scopeProductKey(matches[0])
+				if len(mr.ranges) != 1 {
+					ambiguous[key] = true
+					continue
+				}
+				if prior := hints[key]; prior.VulnerableRange != "" && prior.VulnerableRange != mr.ranges[0] {
+					ambiguous[key] = true
+					continue
+				}
+				hints[key] = patchVersionHint{VulnerableRange: mr.ranges[0]}
 			}
-			add = append(add, "< "+v)
-		}
-		for _, mr := range metaRanges {
-			if productMatchesRangeName(product, mr.name) {
-				add = append(add, mr.ranges...)
-			}
-		}
-		if updated := withRanges(product, add); updated != product {
-			out[i] = updated
-			changed = true
 		}
 	}
+	for key := range ambiguous {
+		delete(hints, key)
+	}
+	changed := applySupportedProductScope(doc, hints)
 	if !changed {
 		return briefYAML
 	}
-	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(briefYAML), &doc); err != nil {
-		return briefYAML
-	}
-	doc["affected_products"] = out
-	rendered, err := yaml.Marshal(doc)
+	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return briefYAML
 	}
-	return string(rendered)
-}
-
-func yamlStringListFromBrief(briefYAML, key string) []string {
-	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(briefYAML), &doc); err != nil {
-		return nil
-	}
-	return yamlStringList(doc[key])
+	return string(out)
 }
 
 func nonEmptyTrimmed(in []string) []string {
@@ -114,8 +97,7 @@ func productMatchesRangeName(product, name string) bool {
 	if i := strings.Index(product, "("); i > 0 {
 		product = product[:i]
 	}
-	p, n := normalizeProductName(product), normalizeProductName(name)
-	return p != "" && n != "" && (strings.Contains(n, p) || strings.Contains(p, n))
+	return productNameLocation(name, product) != nil || productNameLocation(product, name) != nil
 }
 
 // withRanges appends each range in add that the entry does not already carry:

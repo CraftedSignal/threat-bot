@@ -99,3 +99,59 @@ func TestRunnerRecoversStoredFutureCheckpoint(t *testing.T) {
 		t.Fatal("future stored checkpoint suppressed current items")
 	}
 }
+
+func TestRSSCorrectionRetainedAcross304Checkpoints(t *testing.T) {
+	updated := time.Date(2026, 11, 14, 6, 0, 0, 0, time.UTC)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("If-None-Match") == `"correction-v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `"correction-v1"`)
+		_, _ = fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom"><title>Corrections</title><id>fixture</id><updated>%s</updated><entry><id>advisory</id><title>Corrected advisory</title><link href="https://example.invalid/advisory"/><published>2020-01-01T00:00:00Z</published><updated>%s</updated><content>Benign corrected product scope.</content></entry></feed>`, updated.Format(time.RFC3339), updated.Format(time.RFC3339))
+	}))
+	defer server.Close()
+	feed := NewRSS("fixture", server.URL)
+	items, err := feed.Poll(context.Background(), updated.Add(time.Hour))
+	if err != nil || len(items) != 0 {
+		t.Fatalf("initial window: items=%v err=%v", items, err)
+	}
+	items, err = feed.Poll(context.Background(), updated.Add(-time.Hour))
+	if err != nil || len(items) != 1 {
+		t.Fatalf("304 discarded retained correction: items=%v err=%v", items, err)
+	}
+	if requests != 2 || !items[0].UpdatedAt.Equal(updated) || items[0].PublishedAt.Year() != 2020 {
+		t.Fatalf("correction history not retained: requests=%d item=%+v", requests, items[0])
+	}
+}
+
+func TestRunnerCorrectionCheckpointUsesUpdatedEvidence(t *testing.T) {
+	db, err := storage.Open(t.TempDir() + "/state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	prior := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	updated := prior.Add(time.Hour)
+	item := RawItem{SourceID: "corrected", Source: "anchor-source", Title: "Corrected advisory", PublishedAt: prior.AddDate(-1, 0, 0), UpdatedAt: updated}
+	if err := db.SaveScraperState(item.Source, prior, "prior"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkSeenRevision(item.SourceID, item.Source, item.Title, item.ContentRevision()); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(db, testLogger(), 24*time.Hour)
+	runner.RegisterWithInterval(anchorSourceScraper{item: item}, time.Hour)
+	if _, err := runner.PollAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.GetScraperState(item.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastPoll.Equal(updated) {
+		t.Fatalf("correction checkpoint ignored update date: got=%s want=%s", state.LastPoll, updated)
+	}
+}

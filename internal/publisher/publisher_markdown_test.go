@@ -248,7 +248,7 @@ func TestRenderPublicBriefMarkdownEnforcesFeedContract(t *testing.T) {
 		t.Fatal("expected invalid public Markdown to be rejected")
 	}
 
-	initial := BundleBrief{ID: "brief-1", Slug: "brief-1", Title: "Initial", PublishedAt: "2026-10-20T00:00:00Z"}
+	initial := BundleBrief{ID: "brief-1", Slug: "brief-1", Title: "Initial", Content: "The initial notice records suspicious process activity for analyst review.", PublishedAt: "2026-10-20T00:00:00Z"}
 	_, previous, _, publish, err := RenderPublicBriefMarkdown(initial, nil)
 	if err != nil || !publish {
 		t.Fatalf("initial render: publish=%t err=%v", publish, err)
@@ -875,7 +875,7 @@ func TestBriefToMarkdownDoesNotDeclareCVEsNamedOnlyInRevisionHistory(t *testing.
 	brief := BundleBrief{
 		ID: "brief-corrected", EventID: "brief-corrected", Slug: "brief-corrected",
 		Title: "Linux Kernel: io_uring privilege escalation (CVE-2024-0582)", Summary: "CVE-2024-0582 is a use-after-free.",
-		Content: "A proof of concept for CVE-2024-0582 has been published.", Severity: "high",
+		Content: "A proof of concept for CVE-2024-0582 has been published.\n\n## Recommendation\nInventory affected Linux kernels and consult the vendor advisory for fixed releases.", Severity: "high",
 		PublishedAt: "2026-10-23T19:48:50Z", Revision: 3,
 		AffectedVendors: []string{"Linux"}, AffectedProducts: []string{"Linux Kernel"},
 		CVEs: []BundleCVE{{ID: "CVE-2024-0582", KEVStatus: "false"}},

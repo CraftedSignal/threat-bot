@@ -63,17 +63,18 @@ type BundleBrief struct {
 	// classifier can tell rule-feed-sourced briefs apart from
 	// vulnerability writeups that happen to have a synthesized rule.
 	// Empty on briefs published before that change shipped.
-	Source               string                      `json:"source,omitempty" yaml:"source,omitempty"`
-	Tags                 []string                    `json:"tags,omitempty" yaml:"tags"`
-	References           []string                    `json:"references,omitempty" yaml:"references"`
-	Rules                []BundleRule                `json:"rules,omitempty" yaml:"rules"`
-	IOCs                 []BundleIOC                 `json:"iocs,omitempty" yaml:"iocs"`
-	TTPs                 []BundleTTP                 `json:"ttps,omitempty" yaml:"ttps"`
-	Priority             string                      `json:"priority,omitempty" yaml:"priority"`
-	PriorityScore        int                         `json:"priority_score,omitempty" yaml:"priority_score"`
-	PrioritySignals      []string                    `json:"priority_signals,omitempty" yaml:"priority_signals"`
-	CVEs                 []BundleCVE                 `json:"cves,omitempty" yaml:"cves"`
-	ExploitationEvidence *BundleExploitationEvidence `json:"exploitation_evidence,omitempty" yaml:"exploitation_evidence,omitempty"`
+	Source               string                              `json:"source,omitempty" yaml:"source,omitempty"`
+	Tags                 []string                            `json:"tags,omitempty" yaml:"tags"`
+	References           []string                            `json:"references,omitempty" yaml:"references"`
+	Rules                []BundleRule                        `json:"rules,omitempty" yaml:"rules"`
+	IOCs                 []BundleIOC                         `json:"iocs,omitempty" yaml:"iocs"`
+	TTPs                 []BundleTTP                         `json:"ttps,omitempty" yaml:"ttps"`
+	Priority             string                              `json:"priority,omitempty" yaml:"priority"`
+	PriorityScore        int                                 `json:"priority_score,omitempty" yaml:"priority_score"`
+	PrioritySignals      []string                            `json:"priority_signals,omitempty" yaml:"priority_signals"`
+	CVEVerification      map[string]pipeline.CVEVerification `json:"cve_verification,omitempty" yaml:"cve_verification,omitempty"`
+	CVEs                 []BundleCVE                         `json:"cves,omitempty" yaml:"cves"`
+	ExploitationEvidence *BundleExploitationEvidence         `json:"exploitation_evidence,omitempty" yaml:"exploitation_evidence,omitempty"`
 
 	SourceAssessment *BundleSourceAssessment `json:"source_assessment,omitempty" yaml:"source_assessment,omitempty"`
 	QAStatus         *BundleQAStatus         `json:"qa_status,omitempty" yaml:"qa_status,omitempty"`
@@ -522,7 +523,7 @@ func ParseBriefYAML(yamlStr string) (*BundleBrief, error) {
 	// Every published brief passes through here, including merged drafts that
 	// never re-run the validator, so list hygiene is enforced here too.
 	brief.AffectedVendors = pipeline.CleanAffectedList(brief.AffectedVendors)
-	brief.AffectedProducts = pipeline.CleanAffectedList(brief.AffectedProducts)
+	brief.AffectedProducts = pipeline.CleanProductList(brief.AffectedProducts)
 	brief.AffectedOS = pipeline.CleanAffectedList(brief.AffectedOS)
 	brief.CPEs = pipeline.CleanCPEList(brief.CPEs)
 	return &brief, nil

@@ -27,8 +27,8 @@ type scraperEntry struct {
 // runnerStore is the durable state required to acknowledge a source poll.
 type runnerStore interface {
 	GetScraperState(string) (*storage.ScraperState, error)
-	HasSeen(string) (bool, error)
-	MarkSeen(string, string, string) error
+	HasSeenRevision(string, string) (bool, error)
+	MarkSeenRevision(string, string, string, string, ...string) error
 	SaveScraperState(string, time.Time, string) error
 }
 
@@ -229,15 +229,17 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 					item.PublishedAt = pollNow
 					items[index] = item
 				}
-				if !item.PublishedAt.IsZero() && item.PublishedAt.Before(cutoff) {
+				freshness := itemFreshness(item)
+				item.Revision = item.ContentRevision()
+				if !freshness.IsZero() && freshness.Before(cutoff) {
 					r.logger.Debug("skipping old item", "source_id", item.SourceID, "published_at", item.PublishedAt, "cutoff", cutoff)
-					if err := r.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
+					if err := r.db.MarkSeenRevision(item.SourceID, item.Source, item.Title, item.Revision); err != nil {
 						failState("recording old item", err)
 						return
 					}
 					continue
 				}
-				seen, err := r.db.HasSeen(item.SourceID)
+				seen, err := r.db.HasSeenRevision(item.SourceID, item.Revision)
 				if err != nil {
 					failState("checking seen state", err)
 					return
@@ -257,11 +259,11 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 			// burned and the source skips its entire backlog forever. Only
 			// advance when we actually fetched something AND nothing was new.
 			if len(items) > 0 && len(newItems) == 0 {
-				boundary := items[0].PublishedAt
+				boundary := itemFreshness(items[0])
 				cursor := items[0].SourceID
 				for _, item := range items[1:] {
-					if item.PublishedAt.After(boundary) {
-						boundary = item.PublishedAt
+					if fresh := itemFreshness(item); fresh.After(boundary) {
+						boundary = fresh
 						cursor = item.SourceID
 					}
 				}

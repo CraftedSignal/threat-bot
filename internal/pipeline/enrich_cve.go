@@ -99,7 +99,7 @@ func (e *CVEEnricher) enrich(briefYAML string, only, keep map[string]bool, exemp
 			cves = append(cves, cve)
 		}
 	}
-	// A kept CVE NVD could not verify (Verify checks only a few per call) must
+	// A kept CVE the authorities could not verify must
 	// not vanish when EnrichBriefWithCVEs rebuilds the cves list.
 	have := cveIDSet(cves)
 	for _, cve := range existingStructured {
@@ -150,6 +150,13 @@ func structuredCVEsFromBrief(briefYAML string) []BundleCVE {
 	}
 	var cves []BundleCVE
 	for _, item := range yamlAnyList(doc["cves"]) {
+		if scalar, ok := item.(string); ok {
+			id := strings.ToUpper(strings.TrimSpace(scalar))
+			if match := sourceCVEPattern.FindString(id); id != "" && match == id {
+				cves = append(cves, BundleCVE{ID: id})
+			}
+			continue
+		}
 		entry, ok := asStringMap(item)
 		if !ok {
 			continue
@@ -502,7 +509,7 @@ type patchVersionHint struct {
 	VulnerableRange string
 	FixedVersion    string
 	// BeforeVersions lists every version named by a "before X, Y and Z" phrase,
-	// in source order. FixedVersion is its first entry.
+	// in source order. A boundary alone does not establish a fixed release.
 	BeforeVersions []string
 }
 
@@ -511,7 +518,7 @@ var (
 	patchedInRe     = regexp.MustCompile(`(?i)\b(?:patched|fixed|resolved|addressed)\s+in\s+(?:version\s+)?([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)`)
 	updateToRe      = regexp.MustCompile(`(?i)\b(?:upgrade|upgrading|update|updating|patch|patching)\b[^.\n]{0,120}?\bto\s+(?:[A-Za-z][A-Za-z0-9._+-]*\s+){0,6}(?:version\s+)?([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)\s+(?:or\s+later|and\s+later|or\s+newer|or\s+higher)`)
 	rangeThroughRe  = regexp.MustCompile(`(?i)\bversions?\s+([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)\s+(?:through|to|-)\s+([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)`)
-	upToRe          = regexp.MustCompile(`(?i)\bversions?\s+(?:up\s+to\s+and\s+including|up\s+to|through)\s+([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)`)
+	upToRe          = regexp.MustCompile(`(?i)\bversions?\s+(?:up\s+to(?:\s*,?\s*and\s+including\s*,?)?|through)\s+([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)`)
 	earlierRe       = regexp.MustCompile(`(?i)\bversions?\s+([0-9][A-Za-z0-9._+-]*(?:\.[A-Za-z0-9._+-]+)+)\s+(?:and\s+)?(?:earlier|below|or\s+earlier)`)
 	versionLikeRe   = regexp.MustCompile(`(?i)\b(?:version\s+)?\d+(?:\.\d+)+(?:[-+._a-z0-9]*)\b`)
 	cpeComponentRe  = regexp.MustCompile(`[^a-z0-9]+`)
@@ -554,22 +561,27 @@ func enrichCVEScope(briefYAML string, cpes []string, metas []*CVEMeta) string {
 		return briefYAML
 	}
 
-	changed := mergeStringListField(doc, "cpes", cpes)
+	// A repaired scope dispute also excludes automatic machine-scope
+	// expansion. CPEs may cover more products/branches than this article.
+	scopeDisputed := len(yamlStringList(doc["grounding_rejected_scope"])) > 0
+	changed := false
+	if !scopeDisputed {
+		changed = mergeStringListField(doc, "cpes", cpes)
+	}
 
+	// Only authoritative descriptions are source facts; generated/repaired
+	// prose cannot corroborate itself during later enrichment.
 	scopeText := cveScopeText(doc, metas)
-	hint := extractPatchVersionHint(scopeText)
-	if hint.VulnerableRange != "" {
-		if products, ok := addVersionRangeToAffectedProducts(yamlStringList(doc["affected_products"]), hint.VulnerableRange, hint.FixedVersion, scopeText); ok {
-			doc["affected_products"] = products
-			changed = true
-		}
+	hints := supportedProductScope(yamlStringList(doc["affected_products"]), scopeText)
+	if applySupportedProductScope(doc, hints) {
+		changed = true
 	}
 
 	// Some fresh NVD records have CVSS and an English description but no
 	// configurations block yet. Emit a conservative CPE 2.3 URI from a clear
 	// vendor+product pair so API consumers still get a machine-readable product
 	// key instead of an empty _cs_cpes array.
-	if len(yamlStringList(doc["cpes"])) == 0 && len(metas) > 0 {
+	if !scopeDisputed && len(yamlStringList(doc["cpes"])) == 0 && len(metas) > 0 {
 		if inferred := synthesizeCPEs(yamlStringList(doc["affected_vendors"]), yamlStringList(doc["affected_products"]), yamlStringList(doc["affected_os"])); len(inferred) > 0 {
 			if mergeStringListField(doc, "cpes", inferred) {
 				changed = true
@@ -577,9 +589,13 @@ func enrichCVEScope(briefYAML string, cpes []string, metas []*CVEMeta) string {
 		}
 	}
 
-	if hint.FixedVersion != "" {
-		if enrichActionPlanPatchVersion(doc, yamlStringList(doc["affected_products"]), hint.FixedVersion) {
-			changed = true
+	// Apply a fixed version only when the source names it for this product.
+	for _, product := range yamlStringList(doc["affected_products"]) {
+		hint := hints[scopeProductKey(product)]
+		if hint.FixedVersion != "" && !scopeRepairBlocked(doc, product) && len(yamlStringList(doc["affected_products"])) == 1 {
+			if enrichActionPlanPatchVersion(doc, []string{product}, hint.FixedVersion) {
+				changed = true
+			}
 		}
 	}
 
@@ -638,11 +654,7 @@ func cveScopeText(doc map[string]any, metas []*CVEMeta) string {
 			parts = append(parts, meta.Description)
 		}
 	}
-	for _, key := range []string{"title", "summary", "content"} {
-		if value, ok := doc[key].(string); ok && strings.TrimSpace(value) != "" {
-			parts = append(parts, value)
-		}
-	}
+
 	return strings.Join(parts, "\n")
 }
 
@@ -671,7 +683,6 @@ func extractPatchVersionHint(text string) patchVersionHint {
 	}
 	if before := extractBeforeVersions(text); len(before) > 0 {
 		hint.BeforeVersions = before
-		hint.FixedVersion = before[0]
 		if hint.VulnerableRange == "" {
 			bounds := make([]string, len(before))
 			for i, v := range before {
@@ -690,9 +701,6 @@ func extractPatchVersionHint(text string) patchVersionHint {
 			}
 		}
 	}
-	if hint.VulnerableRange == "" && hint.FixedVersion != "" {
-		hint.VulnerableRange = "< " + hint.FixedVersion
-	}
 	return hint
 }
 
@@ -703,57 +711,6 @@ func cleanVersionToken(v string) string {
 		return ""
 	}
 	return v
-}
-
-func addVersionRangeToAffectedProducts(products []string, vulnerableRange, fixedVersion, text string) ([]string, bool) {
-	if len(products) == 0 || vulnerableRange == "" {
-		return products, false
-	}
-	out := append([]string(nil), products...)
-	changed := false
-	for i, product := range out {
-		product = strings.TrimSpace(product)
-		if product == "" || strings.Contains(product, "(") {
-			continue
-		}
-		if len(out) > 1 && !productVersionHintApplies(product, fixedVersion, text) {
-			continue
-		}
-		out[i] = fmt.Sprintf("%s (%s)", product, vulnerableRange)
-		changed = true
-	}
-	return out, changed
-}
-
-func productVersionHintApplies(product, fixedVersion, text string) bool {
-	if product == "" || fixedVersion == "" {
-		return false
-	}
-	productKey := normalizeProductName(product)
-	if productKey == "" {
-		return false
-	}
-	lowerText := strings.ToLower(text)
-	lowerVersion := strings.ToLower(fixedVersion)
-	for offset := 0; ; {
-		idx := strings.Index(lowerText[offset:], lowerVersion)
-		if idx < 0 {
-			return false
-		}
-		idx += offset
-		start := idx - 160
-		if start < 0 {
-			start = 0
-		}
-		end := idx + len(lowerVersion) + 160
-		if end > len(lowerText) {
-			end = len(lowerText)
-		}
-		if strings.Contains(normalizeProductName(lowerText[start:end]), productKey) {
-			return true
-		}
-		offset = idx + len(lowerVersion)
-	}
 }
 
 func synthesizeCPEs(vendors, products, oses []string) []string {

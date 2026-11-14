@@ -20,6 +20,7 @@ func TestCVEVerifier_ValidCVE(t *testing.T) {
 				json.NewEncoder(rec).Encode(nvdDetailResponse{
 					Vulnerabilities: []nvdVulnerability{{
 						CVE: nvdCVEDetail{
+							ID: req.URL.Query().Get("cveId"),
 							Metrics: nvdMetrics{
 								CvssV31: []nvdCVSSV31{{CVSSData: nvdCVSSData{BaseScore: 7.5}}},
 							},
@@ -65,7 +66,11 @@ func TestCVEVerifier_InvalidCVE(t *testing.T) {
 		Transport: &mockNVDTransport{
 			handler: func(req *http.Request) (*http.Response, error) {
 				rec := httptest.NewRecorder()
-				json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: nil})
+				if req.URL.Host == "cveawg.mitre.org" {
+					rec.WriteHeader(http.StatusNotFound)
+				} else {
+					json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: nil})
+				}
 				return rec.Result(), nil
 			},
 		},
@@ -90,7 +95,7 @@ iocs:
 
 	found := false
 	for _, n := range notes {
-		if strings.Contains(n, "not found in NVD") {
+		if strings.Contains(n, "verification not_found") {
 			found = true
 			break
 		}
@@ -131,8 +136,8 @@ references: []
 			t.Errorf("should not report CVE as invalid when NVD is unreachable: %s", n)
 		}
 	}
-	if result != yaml {
-		t.Error("YAML should be unchanged when NVD is unreachable")
+	if !strings.Contains(result, "status: unavailable") {
+		t.Error("verification outage must be explicit")
 	}
 }
 
@@ -167,7 +172,7 @@ func TestCVEVerifier_Cache(t *testing.T) {
 				callCount++
 				rec := httptest.NewRecorder()
 				json.NewEncoder(rec).Encode(nvdDetailResponse{
-					Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{}}},
+					Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{ID: req.URL.Query().Get("cveId")}}},
 				})
 				return rec.Result(), nil
 			},
@@ -311,6 +316,7 @@ func TestCVEVerifier_GetMeta(t *testing.T) {
 				json.NewEncoder(rec).Encode(nvdDetailResponse{
 					Vulnerabilities: []nvdVulnerability{{
 						CVE: nvdCVEDetail{
+							ID: req.URL.Query().Get("cveId"),
 							Metrics: nvdMetrics{
 								CvssV31: []nvdCVSSV31{{CVSSData: nvdCVSSData{BaseScore: 8.1}}},
 							},
@@ -378,11 +384,11 @@ func TestCVEVerifier_OversizedRecordSkipsVerification(t *testing.T) {
 	brief := "id: brief-big\ntitle: Test CVE-2017-5753\nsummary: Spectre\n"
 	_, notes := v.Verify(context.Background(), brief)
 	for _, n := range notes {
-		if strings.Contains(n, "CVE-2017-5753") {
+		if !strings.Contains(n, "verification unavailable") {
 			t.Errorf("oversized NVD record flagged the CVE: %q", n)
 		}
 	}
-	if v.GetMeta("CVE-2017-5753") != nil {
-		t.Error("oversized NVD record was cached")
+	if meta := v.GetMeta("CVE-2017-5753"); meta == nil || meta.Exists || meta.Verification.Status != "unavailable" {
+		t.Error("oversized response must be recorded unavailable")
 	}
 }

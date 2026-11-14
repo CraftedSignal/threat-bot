@@ -58,7 +58,7 @@ func InferVendorProduct(ctx context.Context, client llm.Client, title, content s
 	if err := client.GenerateJSON(ctx, prompt, vendorInferSystemPrompt, &res); err != nil {
 		return nil, nil, fmt.Errorf("vendor/product inference LLM call: %w", err)
 	}
-	return CleanAffectedList(res.AffectedVendors), CleanAffectedList(res.AffectedProducts), nil
+	return CleanAffectedList(res.AffectedVendors), CleanProductList(res.AffectedProducts), nil
 }
 
 // referencesSection renders the "Reference URLs" prompt section from a list
@@ -145,7 +145,7 @@ func vendorProductFromItemCPEs(item scraper.RawItem) (vendors, products []string
 			products = append(products, p)
 		}
 	}
-	return CleanAffectedList(vendors), CleanAffectedList(products)
+	return CleanAffectedList(vendors), CleanProductList(products)
 }
 
 // rejectGenericCVEBrief reports whether a brief should be dropped for naming
@@ -205,7 +205,7 @@ func backfillAffectedFromSources(item scraper.RawItem, extraction *ExtractionRes
 	}
 	var stages []stage
 	if extraction != nil {
-		stages = append(stages, stage{"extraction", CleanAffectedList(extraction.AffectedVendors), CleanAffectedList(extraction.AffectedProducts)})
+		stages = append(stages, stage{"extraction", CleanAffectedList(extraction.AffectedVendors), CleanProductList(extraction.AffectedProducts)})
 	}
 	cpeVendors, cpeProducts := vendorProductFromItemCPEs(item)
 	stages = append(stages, stage{"nvd_cpes", cpeVendors, cpeProducts})

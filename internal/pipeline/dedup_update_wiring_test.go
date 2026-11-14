@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +15,7 @@ import (
 	"github.com/craftedsignal/threat-bot/internal/storage"
 )
 
-// noopLLM satisfies llm.Client for pipeline paths that never call the model
-// (the post-extraction dedup handler uses only the DB + dedup + mergeIntoDraft).
+// noopLLM satisfies llm.Client for test paths that never call the model.
 type noopLLM struct{}
 
 func (noopLLM) Generate(ctx context.Context, prompt, system string) (string, error) {
@@ -25,15 +25,62 @@ func (noopLLM) GenerateJSON(ctx context.Context, prompt, system string, out any)
 	return nil
 }
 
-// newDedupTestPipeline builds a real Pipeline with a no-op LLM and an NVD stub
+// dedupRelevanceLLM explicitly accepts the submitted candidates for integration
+// tests of successful merging. Relevance/refusal tests install their own client.
+// Other model stages retain the no-op behavior needed by these fixtures.
+type dedupRelevanceLLM struct{ noopLLM }
+
+func (dedupRelevanceLLM) GenerateJSON(ctx context.Context, prompt, system string, out any) error {
+	switch system {
+	case mergeRelevanceSystemPrompt:
+		_, candidates, ok := strings.Cut(prompt, "\nCandidate extracted fields:\n")
+		if !ok {
+			return fmt.Errorf("merge test fixture: missing candidate extraction")
+		}
+		var extraction ExtractionResult
+		if err := json.Unmarshal([]byte(candidates), &extraction); err != nil {
+			return err
+		}
+		return (mergeRelevanceMockLLM{
+			merge: true, referenceRelevant: true, pocRelevant: true,
+			cves: extraction.CVEs, vendors: extraction.AffectedVendors,
+			products: extraction.AffectedProducts, oses: extraction.AffectedOS, iocs: extraction.IOCs,
+			reason: "test fixture explicitly accepts the submitted candidates",
+		}).GenerateJSON(ctx, prompt, system, out)
+	case roundupContentRelevanceSystemPrompt:
+		resp, ok := out.(*roundupContentRelevanceResponse)
+		if !ok {
+			return fmt.Errorf("roundup test fixture: unexpected output %T", out)
+		}
+		_, candidates, ok := strings.Cut(prompt, "\nCandidate affected products: ")
+		if !ok {
+			return fmt.Errorf("roundup test fixture: missing candidate products")
+		}
+		products, oses, ok := strings.Cut(candidates, "\nCandidate affected OS: ")
+		if !ok {
+			return fmt.Errorf("roundup test fixture: missing candidate OS")
+		}
+		resp.Relevant = boolPtr(true)
+		if strings.TrimSpace(products) != "" {
+			resp.AffectedProducts = strings.Split(products, ", ")
+		}
+		if strings.TrimSpace(oses) != "" {
+			resp.AffectedOS = strings.Split(oses, ", ")
+		}
+		resp.Reason = "test fixture explicitly accepts the submitted candidates"
+	}
+	return nil
+}
+
+// newDedupTestPipeline builds a real Pipeline with relevance acceptance and an NVD stub
 // that reports every CVE as existing, so mergeIntoDraft's verifier runs offline.
 func newDedupTestPipeline(t *testing.T, db *storage.DB) *Pipeline {
 	t.Helper()
-	p := New(Config{DB: db, LLMClient: noopLLM{}, FastLLMClient: noopLLM{}, Logger: slog.Default()})
+	p := New(Config{DB: db, LLMClient: dedupRelevanceLLM{}, FastLLMClient: noopLLM{}, Logger: slog.Default()})
 	p.cveVerifier.client = &http.Client{Transport: &mockNVDTransport{
 		handler: func(req *http.Request) (*http.Response, error) {
 			rec := httptest.NewRecorder()
-			_ = json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{}}})
+			_ = json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{ID: req.URL.Query().Get("cveId")}}}})
 			return rec.Result(), nil
 		},
 	}}
@@ -65,12 +112,12 @@ func TestHandlePostExtractionDedup_UpdateMergesInPlace(t *testing.T) {
 	}
 
 	// New item from a DIFFERENT source with exploit signal; the CVE is surfaced
-	// by extraction (not in the raw text), so this reproduces the post-extraction
+	// by extraction and supported by the raw source, reproducing the post-extraction
 	// DedupUpdate that the pipeline previously dropped.
 	item := scraper.RawItem{
 		SourceID: "exploit-db:5", Source: "exploit-db",
 		Title:   "New PoC for the WidgetServer flaw",
-		Content: "A working exploit code / proof-of-concept was released this week.",
+		Content: "A working exploit code / proof-of-concept for CVE-2026-9999 was released this week.",
 	}
 	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"WidgetServer"}}
 

@@ -19,9 +19,9 @@ import (
 // network access, so enrichment sees every CVE a merged brief mentions.
 func stubNVD(p *Pipeline) {
 	p.cveVerifier.client = &http.Client{Transport: &mockNVDTransport{
-		handler: func(*http.Request) (*http.Response, error) {
+		handler: func(req *http.Request) (*http.Response, error) {
 			rec := httptest.NewRecorder()
-			_ = json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{}}})
+			_ = json.NewEncoder(rec).Encode(nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{ID: req.URL.Query().Get("cveId")}}}})
 			return rec.Result(), nil
 		},
 	}}

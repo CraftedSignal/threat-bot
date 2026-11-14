@@ -36,8 +36,8 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 				p.logger.Warn("failed to append corroborating reference", "draft_id", e.DraftID, "err", err)
 			}
 		}
-		if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-			// The draft is already durable; leave the source unseen so a later poll can retry.
+		if err := p.markSeen(item); err != nil {
+			// The durable result remains retryable until the source write succeeds.
 			p.decisions.record(outcomeFailed)
 			p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 		}
@@ -49,6 +49,10 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeRelevanceUnavailable) {
+					p.logger.Warn("merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "error", err)
+					return true
+				}
 				if errors.Is(err, errMergeNotRelevant) && !item.CorroborationOnly {
 					// A separate story: let the caller process it as a new item.
 					p.logger.Info("merge into thin draft refused (post-extraction); processing as new item", "source_id", item.SourceID, "draft_id", targetID, "error", err)
@@ -58,8 +62,8 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 			} else {
 				p.logger.Info("merged into thin draft (post-extraction)", "source_id", item.SourceID, "draft_id", targetID)
 			}
-			if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-				// The draft is already durable; leave the source unseen so a later poll can retry.
+			if err := p.markSeen(item); err != nil {
+				// The durable result remains retryable until the source write succeeds.
 				p.decisions.record(outcomeFailed)
 				p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 			}
@@ -76,13 +80,17 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeRelevanceUnavailable) {
+					p.logger.Warn("update merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", targetID, "error", err)
+					return true
+				}
 				p.logMergeFailure("post-extraction update merge failed", err, "source_id", item.SourceID, "draft_id", targetID)
 				return false
 			}
 			p.logger.Info("post-extraction DedupUpdate: merged into existing draft", "source_id", item.SourceID, "draft_id", targetID)
 			p.indexContent(targetID, item, preCVEs, extraction)
-			if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-				// The draft is already durable; leave the source unseen so a later poll can retry.
+			if err := p.markSeen(item); err != nil {
+				// The durable result remains retryable until the source write succeeds.
 				p.decisions.record(outcomeFailed)
 				p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 			}
@@ -485,6 +493,10 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 	roundupExtraction := sanitizeRoundupExtraction(vendor, extraction)
 	roundupContentExtraction, err := p.filterRoundupContentExtraction(ctx, vendor, extraction, item)
 	if err != nil {
+		if errors.Is(err, errMergeRelevanceUnavailable) {
+			p.logger.Warn("roundup assessment unavailable; retaining source for retry", "source_id", item.SourceID, "error", err)
+			return true
+		}
 		return false
 	}
 	// Fold into an existing roundup for this cycle if one exists.
@@ -497,6 +509,10 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeRelevanceUnavailable) {
+					p.logger.Warn("roundup merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", e.DraftID, "error", err)
+					return true
+				}
 				p.logMergeFailure("roundup merge failed", err, "cycle", key, "draft_id", e.DraftID)
 				return false
 			}
@@ -507,8 +523,8 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 				p.logger.Warn("roundup CVE product annotation failed", "cycle", key, "draft_id", e.DraftID, "error", err)
 			}
 			p.indexRoundupItem(e.DraftID, key, item, roundupExtraction)
-			if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-				// The draft is already durable; leave the source unseen so a later poll can retry.
+			if err := p.markSeen(item); err != nil {
+				// The durable result remains retryable until the source write succeeds.
 				p.decisions.record(outcomeFailed)
 				p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 			}
@@ -526,6 +542,19 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 	} else {
 		yaml = seeded
 	}
+	// Build and gate the complete initial snapshot before any publication
+	// intent exists; a crash cannot recover an unenriched placeholder.
+	if enriched, err := enrichRoundupYAML(yaml, roundupContentExtraction, item); err != nil {
+		p.logger.Warn("initial roundup content enrichment failed", "cycle", key, "error", err)
+		return false
+	} else {
+		yaml = enriched
+	}
+	if annotated, err := annotateRoundupYAML(yaml, roundupContentExtraction); err != nil {
+		return false
+	} else {
+		yaml = annotated
+	}
 	draft := &storage.Draft{
 		ID:        uuid.NewString(),
 		Status:    storage.StatusPending,
@@ -534,15 +563,10 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 		BriefYAML: yaml,
 		CreatedAt: now,
 	}
-	if err := p.createDraft(draft); err != nil {
+	queueInitial, err := p.createTemplateDraft(draft)
+	if err != nil {
 		p.logger.Warn("roundup draft create failed", "cycle", key, "error", err)
 		return false
-	}
-	if err := p.enrichRoundupContent(draft.ID, roundupContentExtraction, item); err != nil {
-		p.logger.Warn("roundup content enrichment failed", "cycle", key, "draft_id", draft.ID, "error", err)
-	}
-	if err := p.annotateRoundupDraftCVEProducts(draft.ID, roundupContentExtraction); err != nil {
-		p.logger.Warn("roundup CVE product annotation failed", "cycle", key, "draft_id", draft.ID, "error", err)
 	}
 	// Record the initial "posted" event so the "What's new" timeline shows
 	// when the roundup was created, not only subsequent CVE additions.
@@ -550,7 +574,7 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 		p.logger.Warn("roundup posted event failed", "cycle", key, "draft_id", draft.ID, "error", err)
 	}
 	p.indexRoundupItem(draft.ID, key, item, roundupExtraction)
-	if p.autoPublish && p.publisher != nil {
+	if queueInitial {
 		updated, _ := p.db.GetDraft(draft.ID)
 		yamlToPublish := yaml
 		if updated != nil {
@@ -558,12 +582,12 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 		}
 		if err := p.validatePublication(yamlToPublish); err != nil {
 			p.logger.Warn("roundup held for editorial review", "draft_id", draft.ID, "error", err)
-		} else if err := p.queueDraftPublication(yamlToPublish, draft.ID, ""); err != nil {
+		} else if err := p.enqueuePublicationIntent(storage.PublicationIntent{DraftID: draft.ID, BriefYAML: yamlToPublish, CompleteDraft: true}); err != nil {
 			p.logger.Error("roundup auto-publish failed", "draft_id", draft.ID, "error", err)
 		}
 	}
-	if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-		// The draft is already durable; leave the source unseen so a later poll can retry.
+	if err := p.markSeen(item); err != nil {
+		// The durable result remains retryable until the source write succeeds.
 		p.decisions.record(outcomeFailed)
 		p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 	}
@@ -580,69 +604,18 @@ func (p *Pipeline) enrichRoundupContent(draftID string, extraction *ExtractionRe
 	if err != nil {
 		return fmt.Errorf("load draft: %w", err)
 	}
-	var fm map[string]any
-	if err := yaml.Unmarshal([]byte(draft.BriefYAML), &fm); err != nil {
-		return fmt.Errorf("parse draft yaml: %w", err)
+	if draft == nil {
+		return fmt.Errorf("draft %s not found", draftID)
 	}
-
-	content, _ := fm["content"].(string)
-	content = strings.TrimSpace(content)
-
-	var b strings.Builder
-	b.WriteString(content)
-	if !strings.HasSuffix(content, "\n") {
-		b.WriteString("\n")
+	updated, err := enrichRoundupYAML(draft.BriefYAML, extraction, item)
+	if err != nil {
+		return err
 	}
-
-	added := false
-	for _, raw := range extraction.CVEs {
-		cve := strings.ToUpper(strings.TrimSpace(raw))
-		if cve == "" {
-			continue
-		}
-		// Skip if a section for this CVE already exists in the content.
-		if strings.Contains(content, "\n## "+cve) || strings.HasPrefix(content, "## "+cve) {
-			continue
-		}
-		b.WriteString("\n## ")
-		b.WriteString(cve)
-		b.WriteString("\n\n")
-		if extraction.Summary != "" {
-			b.WriteString(extraction.Summary)
-			b.WriteString("\n\n")
-		}
-		if len(extraction.AffectedProducts) > 0 {
-			b.WriteString("Affected products:\n")
-			for _, prod := range extraction.AffectedProducts {
-				prod = strings.TrimSpace(prod)
-				if prod != "" {
-					b.WriteString("- ")
-					b.WriteString(prod)
-					b.WriteString("\n")
-				}
-			}
-			b.WriteString("\n")
-		}
-		if item.URL != "" {
-			b.WriteString("Source: ")
-			b.WriteString(item.URL)
-			b.WriteString("\n")
-		}
-		added = true
-	}
-
-	if !added {
+	if updated == draft.BriefYAML {
 		return nil
 	}
-
-	content = b.String()
-	content = rebuildRoundupContent(fm, content)
-	fm["content"] = content
-	out, err := yaml.Marshal(fm)
-	if err != nil {
-		return fmt.Errorf("marshal updated draft: %w", err)
-	}
-	return p.db.UpdateDraftYAML(draftID, string(out))
+	publish := p.autoPublish && p.publisher != nil && p.validatePublication(updated) == nil
+	return p.db.UpdateDraftYAMLWithPublication(draftID, updated, publish, false)
 }
 
 func (p *Pipeline) annotateRoundupDraftCVEProducts(draftID string, extraction *ExtractionResult) error {
@@ -671,7 +644,8 @@ func (p *Pipeline) annotateRoundupDraftCVEProducts(draftID string, extraction *E
 	if err != nil {
 		return fmt.Errorf("marshal draft yaml: %w", err)
 	}
-	return p.db.UpdateDraftYAML(draftID, string(out))
+	publish := p.autoPublish && p.publisher != nil && p.validatePublication(string(out)) == nil
+	return p.db.UpdateDraftYAMLWithPublication(draftID, string(out), publish, false)
 }
 
 func annotateCVEProducts(fm map[string]any, cves []string, product string) bool {
@@ -765,6 +739,17 @@ func rebuildRoundupContent(fm map[string]any, content string) string {
 		b.WriteString(index)
 		b.WriteString("\n\n")
 	}
+	// Keep the template's response guidance when replacing the overview and
+	// summary. Dropping it leaves an accurate CVE index without remediation.
+	firstCVE := strings.Index(content, "## CVE-")
+	if start := strings.Index(content, "## Recommendation\n"); start >= 0 && (firstCVE < 0 || start < firstCVE) {
+		recommendation := content[start:]
+		if end := strings.Index(recommendation[len("## Recommendation\n"):], "\n## "); end >= 0 {
+			recommendation = recommendation[:len("## Recommendation\n")+end]
+		}
+		b.WriteString(strings.TrimSpace(recommendation))
+		b.WriteString("\n\n")
+	}
 
 	// Drop the legacy per-section "Related in this roundup:" lines that
 	// earlier revisions injected; the By product index replaces them.
@@ -776,4 +761,70 @@ func rebuildRoundupContent(fm map[string]any, content string) string {
 		b.WriteString(content)
 	}
 	return b.String()
+}
+
+func enrichRoundupYAML(briefYAML string, extraction *ExtractionResult, item scraper.RawItem) (string, error) {
+	var fm map[string]any
+	if err := yaml.Unmarshal([]byte(briefYAML), &fm); err != nil {
+		return "", fmt.Errorf("parse draft yaml: %w", err)
+	}
+
+	content, _ := fm["content"].(string)
+	content = strings.TrimSpace(content)
+
+	var b strings.Builder
+	b.WriteString(content)
+	if !strings.HasSuffix(content, "\n") {
+		b.WriteString("\n")
+	}
+
+	added := false
+	for _, raw := range extraction.CVEs {
+		cve := strings.ToUpper(strings.TrimSpace(raw))
+		if cve == "" {
+			continue
+		}
+		// Skip if a section for this CVE already exists in the content.
+		if strings.Contains(content, "\n## "+cve) || strings.HasPrefix(content, "## "+cve) {
+			continue
+		}
+		b.WriteString("\n## ")
+		b.WriteString(cve)
+		b.WriteString("\n\n")
+		if extraction.Summary != "" {
+			b.WriteString(extraction.Summary)
+			b.WriteString("\n\n")
+		}
+		if len(extraction.AffectedProducts) > 0 {
+			b.WriteString("Affected products:\n")
+			for _, prod := range extraction.AffectedProducts {
+				prod = strings.TrimSpace(prod)
+				if prod != "" {
+					b.WriteString("- ")
+					b.WriteString(prod)
+					b.WriteString("\n")
+				}
+			}
+			b.WriteString("\n")
+		}
+		if item.URL != "" {
+			b.WriteString("Source: ")
+			b.WriteString(item.URL)
+			b.WriteString("\n")
+		}
+		added = true
+	}
+
+	if !added {
+		return briefYAML, nil
+	}
+
+	content = b.String()
+	content = rebuildRoundupContent(fm, content)
+	fm["content"] = content
+	out, err := yaml.Marshal(fm)
+	if err != nil {
+		return "", fmt.Errorf("marshal updated draft: %w", err)
+	}
+	return string(out), nil
 }

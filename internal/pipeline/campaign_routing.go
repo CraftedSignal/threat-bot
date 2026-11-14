@@ -96,12 +96,16 @@ func (p *Pipeline) routeToCampaign(ctx context.Context, item scraper.RawItem, ex
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return false
 				}
+				if errors.Is(err, errMergeRelevanceUnavailable) {
+					p.logger.Warn("campaign merge assessment unavailable; retaining source for retry", "source_id", item.SourceID, "draft_id", e.DraftID, "error", err)
+					return true
+				}
 				p.logMergeFailure("campaign merge failed", err, "family", family, "draft_id", e.DraftID)
 				return false
 			}
 			p.indexRoundupItem(e.DraftID, key, item, extraction)
-			if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-				// The draft is already durable; leave the source unseen so a later poll can retry.
+			if err := p.markSeen(item); err != nil {
+				// The durable result remains retryable until the source write succeeds.
 				p.decisions.record(outcomeFailed)
 				p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 			}
@@ -111,6 +115,12 @@ func (p *Pipeline) routeToCampaign(ctx context.Context, item scraper.RawItem, ex
 	}
 	// Otherwise create the umbrella (template — no LLM assembly).
 	yaml := buildCampaignBriefYAML(family, time.Now().UTC())
+	if seeded, err := ensureInitialSourceReference(yaml, item.URL); err != nil {
+		p.logger.Warn("campaign source reference not seeded", "family", family, "error", err)
+		return false
+	} else {
+		yaml = seeded
+	}
 	draft := &storage.Draft{
 		ID:        uuid.NewString(),
 		Status:    storage.StatusPending,
@@ -119,20 +129,21 @@ func (p *Pipeline) routeToCampaign(ctx context.Context, item scraper.RawItem, ex
 		BriefYAML: yaml,
 		CreatedAt: time.Now(),
 	}
-	if err := p.createDraft(draft); err != nil {
+	queueInitial, err := p.createTemplateDraft(draft)
+	if err != nil {
 		p.logger.Warn("campaign draft create failed", "family", family, "error", err)
 		return false
 	}
 	p.indexRoundupItem(draft.ID, key, item, extraction)
-	if p.autoPublish && p.publisher != nil {
+	if queueInitial {
 		if err := p.validatePublication(yaml); err != nil {
 			p.logger.Warn("campaign held for editorial review", "draft_id", draft.ID, "error", err)
-		} else if err := p.queueDraftPublication(yaml, draft.ID, ""); err != nil {
+		} else if err := p.enqueuePublicationIntent(storage.PublicationIntent{DraftID: draft.ID, BriefYAML: yaml, CompleteDraft: true}); err != nil {
 			p.logger.Error("campaign auto-publish failed", "draft_id", draft.ID, "error", err)
 		}
 	}
-	if err := p.db.MarkSeen(item.SourceID, item.Source, item.Title); err != nil {
-		// The draft is already durable; leave the source unseen so a later poll can retry.
+	if err := p.markSeen(item); err != nil {
+		// The durable result remains retryable until the source write succeeds.
 		p.decisions.record(outcomeFailed)
 		p.logger.Error("failed to record seen item; source remains retryable", "source_id", item.SourceID, "error", err)
 	}

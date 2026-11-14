@@ -71,6 +71,8 @@ type ClaimEvidence struct {
 	Type      string `json:"type" yaml:"type"`
 	Detail    string `json:"detail" yaml:"detail"`
 	SourceURL string `json:"source_url" yaml:"source_url"`
+	// Only pipeline source checks may attest evidence. Model JSON cannot mint it.
+	Provenance *ClaimEvidenceProvenance `json:"-" yaml:"provenance,omitempty"`
 }
 
 type ExtractedIOC struct {

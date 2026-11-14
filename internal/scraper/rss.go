@@ -132,6 +132,11 @@ func (r *RSS) Poll(ctx context.Context, since time.Time) ([]RawItem, error) {
 			published = time.Now()
 		}
 
+		updated := time.Time{}
+		if entry.UpdatedParsed != nil {
+			updated = *entry.UpdatedParsed
+
+		}
 		guid := entry.GUID
 		if guid == "" {
 			guid = entry.Link
@@ -144,6 +149,7 @@ func (r *RSS) Poll(ctx context.Context, since time.Time) ([]RawItem, error) {
 			URL:                 entry.Link,
 			Content:             entry.Description + "\n\n" + entry.Content,
 			PublishedAt:         published,
+			UpdatedAt:           updated,
 			NeedsFullArticle:    r.authoritativeArticleCVEs,
 			BodyCVEsAreSubjects: r.authoritativeArticleCVEs,
 		})
@@ -164,7 +170,7 @@ func (r *RSS) cachedItemsSince(since time.Time) []RawItem {
 	defer r.validatorMu.Unlock()
 	var items []RawItem
 	for _, item := range r.cachedItems {
-		if !item.PublishedAt.Before(since) {
+		if !itemFreshness(item).Before(since) {
 			items = append(items, item)
 		}
 	}

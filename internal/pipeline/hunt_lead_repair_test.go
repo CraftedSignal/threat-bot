@@ -16,6 +16,7 @@ const ttpsOnlyBriefYAML = `id: brief-2026-10-ttps
 slug: 2026-10-ttps
 title: Loader abuses scheduled tasks
 summary: A loader persists through scheduled tasks.
+content: The loader creates a scheduled task named Updater for persistence.
 severity: medium
 published_at: "2026-10-19T08:00:00Z"
 ttps:

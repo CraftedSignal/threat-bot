@@ -1,0 +1,6 @@
+{
+  "title": "Widget arbitrary file deletion notice",
+  "url": "https://vendor.example/widget/advisory",
+  "content": "Widget 2.1 permits arbitrary file deletion when an administrator renames an attachment. A fixed release is not specified. Administrators should inventory installations and consult the vendor advisory. Audit records show an HTTP POST to /rename before file deletion.",
+  "provenance": "Hand-authored security advisory fixture, not a real incident or model output."
+}

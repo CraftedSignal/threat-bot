@@ -229,11 +229,5 @@ func (d *DB) CountDistinctSourcesForCVE(cveID string) (int, error) {
 
 // IndexContent inserts a new content index entry.
 func (d *DB) IndexContent(entry *ContentIndexEntry) error {
-	_, err := d.db.Exec(
-		`INSERT INTO content_index (cve_id, title_hash, fingerprint_hash, product_fingerprint_hash, title_norm, content_hash, vendor_cycle_key, source_url_hash, source_published_day, claim_key, draft_id, source_id, source, cve_context, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		entry.CVEID, entry.TitleHash, entry.FingerprintHash, entry.ProductFingerprintHash, entry.TitleNorm, entry.ContentHash, entry.VendorCycleKey,
-		entry.SourceURLHash, entry.SourcePublishedDay, entry.ClaimKey, entry.DraftID, entry.SourceID, entry.Source, entry.CVEContext, entry.CreatedAt,
-	)
-	return err
+	return insertContentIndex(d.db, entry)
 }

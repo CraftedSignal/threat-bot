@@ -119,13 +119,13 @@
       "files": [
         {
           "bytes": 1453,
-          "path": "LICENSES/dependencies/golang.org/x/oauth2/v0.37.0/LICENSE",
+          "path": "LICENSES/dependencies/golang.org/x/oauth2/v0.38.0/LICENSE",
           "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
         }
       ],
-      "go_sum": "h1:JUlcxA8oAtauLfiH8FX2/FkAWHAdi0QtGCGc+hofE98=",
+      "go_sum": "h1:uW7XQbcu1eoiQS7uMJvLOjPMl04bTbmY1VeRPxvbspI=",
       "module": "golang.org/x/oauth2",
-      "version": "v0.37.0"
+      "version": "v0.38.0"
     },
     {
       "files": [
@@ -182,18 +182,18 @@
       "files": [
         {
           "bytes": 1482,
-          "path": "LICENSES/dependencies/modernc.org/libc/v1.79.0/LICENSE",
+          "path": "LICENSES/dependencies/modernc.org/libc/v1.80.1/LICENSE",
           "sha256": "95ff867eb55a56935fa7492406cfa953fb7c13ca73f4c0a86ae05756b4605600"
         },
         {
           "bytes": 10505,
-          "path": "LICENSES/dependencies/modernc.org/libc/v1.79.0/LICENSE-3RD-PARTY.md",
+          "path": "LICENSES/dependencies/modernc.org/libc/v1.80.1/LICENSE-3RD-PARTY.md",
           "sha256": "f597097efe3d97021f89170746bd3a0fb9a8b6fb26b82043ed68a4e0283bee6c"
         }
       ],
-      "go_sum": "h1:9Dvvv++bAMSkSuBzuOFAatbTV5OIoq6Y6FohmD3e7q8=",
+      "go_sum": "h1:ejn7HtTV3GknNKbklqWQ1nvUrfX8mTxs1D+xp/JQwy4=",
       "module": "modernc.org/libc",
-      "version": "v1.79.0"
+      "version": "v1.80.1"
     },
     {
       "files": [
@@ -238,28 +238,28 @@
       "files": [
         {
           "bytes": 1489,
-          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.61.1/LICENSE",
+          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.62.0/LICENSE",
           "sha256": "c6fe05491a60ae13bcd223088d2705e36dede24e5587226231d2459ada5c4822"
         },
         {
-          "bytes": 74323,
-          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.61.1/LICENSE-3RD-PARTY.md",
-          "sha256": "4194f8e7119be72babd499db4f6f1f7547e36e8a7bffcb2b9c8df241b8f1576a"
+          "bytes": 74353,
+          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.62.0/LICENSE-3RD-PARTY.md",
+          "sha256": "f4a00ade8f4057ab0ea49097d9c459df8559fcf10ca78da0c950343fb7428d37"
         },
         {
           "bytes": 1506,
-          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.61.1/LICENSE-SQLITE",
+          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.62.0/LICENSE-SQLITE",
           "sha256": "8438c9c89b849131ead81d5435cb97fcf052df5b0b286dda8a2d4c29e6cb3fd0"
         },
         {
           "bytes": 1068,
-          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.61.1/LICENSE-SQLITE_VEC",
+          "path": "LICENSES/dependencies/modernc.org/sqlite/v1.62.0/LICENSE-SQLITE_VEC",
           "sha256": "6ce72bbe12d975bd5286e5ab0a064c069693300c47bccbc57bec18485f1621ea"
         }
       ],
-      "go_sum": "h1:TBEE49wz7VlxS+qXRXMQiPUZYOXHJ4ku83daYv1fe04=",
+      "go_sum": "h1:gMaCjSM1qpl+iOjiWhR1LYP3zqrYDI+5GYLGt6veP2g=",
       "module": "modernc.org/sqlite",
-      "version": "v1.61.1"
+      "version": "v1.62.0"
     }
   ],
   "schema_version": 1,

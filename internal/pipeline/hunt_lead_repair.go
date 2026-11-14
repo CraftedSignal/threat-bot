@@ -123,7 +123,7 @@ func (p *Pipeline) repairMissingHuntLeadGrounded(ctx context.Context, item scrap
 	if !ok {
 		return briefYAML, false
 	}
-	result, err := p.grounding.Check(ctx, item.Title, groundingSource(item), huntLeadGroundingView(repaired, item.URL))
+	result, err := p.grounding.checkClaims(ctx, item.Title, groundingSource(item), huntLeadGroundingView(repaired, item.URL))
 	if err != nil || !result.Grounded {
 		var issues []string
 		if result != nil {

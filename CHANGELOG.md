@@ -11,5 +11,6 @@ This file records user-visible changes. No tagged release is implied by an entry
 - Replace large imported report excerpts with a small original synthetic corpus and a required deterministic replay regression.
 - Harden outbound requests, operational diagnostics, persistence failure handling, and build inputs during source preparation.
 - Share deterministic narrative/action-plan readiness across pipeline and feed validation; retain editorial merge holds and bounded retries across restart.
+- Restore validated material source facts within bounded grounding repair, keep partial-claim checks separate, and preserve compatible processing checkpoints during the rename.
 
 Before upgrading an existing installation, review the exact release notes, validate configuration, back up SQLite, and test with publishing disabled. Existing feed identities and compatibility fields remain separate from the application's renamed command/module.

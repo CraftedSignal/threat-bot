@@ -291,10 +291,10 @@ func checkWithReport(t *testing.T, logs *bytes.Buffer, brief string, issues ...g
 	return result
 }
 
-func TestGroundingCheckOmissionIsGrounded(t *testing.T) {
+func TestGroundingCheckMinorOmissionIsAdvisory(t *testing.T) {
 	var logs bytes.Buffer
 	res := checkWithReport(t, &logs, "summary: Synology flaw\n",
-		groundingIssue{Kind: "omission", Field: "affected_products", Reason: "failed to include version ranges"})
+		groundingIssue{Kind: "omission", Field: "content", Reason: "failed to include the researcher's acknowledgement"})
 	if !res.Grounded || len(res.Issues) != 0 {
 		t.Fatalf("omission must not unground: %+v", res)
 	}

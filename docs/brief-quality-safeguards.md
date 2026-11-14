@@ -43,6 +43,23 @@ or rejected and the authority checked. Lookup absence is not proof that an ID is
 invalid. Rejected/reserved identities block publication; source-listed IDs survive
 propagation outages without invented CVSS/vector metadata.
 
+Full-brief grounding also checks material source facts that change applicability
+or the defender response, such as affected ranges, fixed releases, prerequisites
+and impact limits. A blocking omission must quote the supplied source and match
+the brief's product or CVE. Repair can restore that supported fact within the
+existing bounded check/repair/recheck budget; it cannot invent an unspecified
+fix or transfer another product's remediation. Minor background omissions remain
+advisory. Partial merge claims and added hunt leads use a claims-only check, so
+they do not acquire full-brief completeness requirements.
+
+Verified source-listed CVEs can carry supplementary CVE Program evidence into
+grounding. The optional lookup has a three-second deadline, shares in-flight
+requests, and retains at most 80 facts and 12,000 encoded bytes per record.
+Product and CVE attribution stay attached to each fact, and primary fields
+precede long article text. Missing, truncated or unavailable evidence remains an
+explicit uncertainty; an ordinary supplemental outage preserves a verified NVD
+identity. An explicit rejected/reserved primary identity requires review.
+
 ## Durable processing
 
 Stable source IDs and evidence revisions are separate. Synthetic publication

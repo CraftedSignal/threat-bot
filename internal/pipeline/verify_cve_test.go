@@ -165,10 +165,17 @@ references: []
 
 func TestCVEVerifier_Cache(t *testing.T) {
 	callCount := 0
+	cnaCalls := 0
 	v := NewCVEVerifier(nil, nil)
 	v.client = &http.Client{
 		Transport: &mockNVDTransport{
 			handler: func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "cveawg.mitre.org" {
+					cnaCalls++
+					rec := httptest.NewRecorder()
+					rec.WriteHeader(http.StatusServiceUnavailable)
+					return rec.Result(), nil
+				}
 				callCount++
 				rec := httptest.NewRecorder()
 				json.NewEncoder(rec).Encode(nvdDetailResponse{
@@ -199,6 +206,9 @@ references: []
 	v.Verify(context.Background(), yaml)
 	if callCount != 1 {
 		t.Errorf("expected still 1 NVD API call (cached), got %d", callCount)
+	}
+	if cnaCalls != 1 {
+		t.Errorf("optional CNA lookup was not cached: got %d calls", cnaCalls)
 	}
 }
 

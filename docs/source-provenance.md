@@ -9,3 +9,10 @@ The shared public packages have their own [import manifest](../pkg/PROVENANCE.md
 Selected follow-up first-party changes share narrative/action-plan readiness checks and retain bounded merge retries and durable editorial holds. The package manifest records the committed origin of the added readiness implementation and the fictional substitutions in its tests. It preserves the original feed import hashes alongside separate hashes for later adaptations. A local reliability adaptation in `internal/storage/merge_review.go` and the pipeline resume path commits quarantine visibility and one held-history record together, and repairs incomplete visibility without repeating assessment; its tests are original fictional fixtures. These curated changes do not import the historical repository's Git ancestry or captured production fixtures.
 
 The public name is `threat-bot`. Persisted wire identifiers and production storage/identity names are compatibility boundaries; see [operations](operations.md). Production deployment source and the identity migration runbook belong in the separately managed infrastructure repository.
+
+The bounded source-completeness follow-up is curated from first-party commit
+`8c978278ab506cb3d9c2262401897488f9bc9f40`. Runtime policy, prompt and schema inputs
+retain compatible processing keys; public regression inputs are fictional.
+Supplemental evidence lookup failures use a fixed uncertainty category rather
+than forwarding transport diagnostics into model input. This port also excludes
+the historical Git ancestry, captured fixtures and internal planning files.

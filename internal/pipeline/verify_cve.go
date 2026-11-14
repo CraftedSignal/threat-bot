@@ -32,6 +32,9 @@ type CVEMeta struct {
 	EPSSPercentile float64
 	CPEs           []string // vulnerable CPE URIs from NVD configurations
 	Description    string   // English NVD description, used for deterministic scope enrichment
+	CNAFacts       []cnaSourceFact
+	CNAGap         string // Explicit coverage uncertainty, never evidence that no fix exists.
+	CNAChecked     bool
 	// SourceIdentifier is NVD's sourceIdentifier (the CNA / submitter, e.g.
 	// security@android.com).
 	SourceIdentifier string
@@ -47,11 +50,12 @@ const maxNVDRecordBytes = 8 << 20
 // CVEVerifier checks CVE IDs against the NVD API to detect hallucinated CVEs,
 // and enriches them with CVSS, EPSS, and KEV data.
 type CVEVerifier struct {
-	client    *http.Client
-	cache     map[string]*CVEMeta
-	mu        sync.Mutex
-	epssCache *scraper.EPSSCache
-	kev       *scraper.KEVCatalog
+	client      *http.Client
+	cache       map[string]*CVEMeta
+	mu          sync.Mutex
+	cnaInFlight map[string]chan struct{}
+	epssCache   *scraper.EPSSCache
+	kev         *scraper.KEVCatalog
 }
 
 // NewCVEVerifier creates a new CVEVerifier. epssCache may be nil, which skips
@@ -59,10 +63,11 @@ type CVEVerifier struct {
 // catalog that has not loaded yet, leaves KEV membership unknown.
 func NewCVEVerifier(epssCache *scraper.EPSSCache, kev *scraper.KEVCatalog) *CVEVerifier {
 	return &CVEVerifier{
-		client:    &http.Client{Timeout: 10 * time.Second},
-		cache:     make(map[string]*CVEMeta),
-		epssCache: epssCache,
-		kev:       kev,
+		client:      &http.Client{Timeout: 10 * time.Second},
+		cache:       make(map[string]*CVEMeta),
+		cnaInFlight: make(map[string]chan struct{}),
+		epssCache:   epssCache,
+		kev:         kev,
 	}
 }
 
@@ -278,7 +283,6 @@ func (v *CVEVerifier) checkNVD(ctx context.Context, cveID string) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("NVD API request failed: %w", err)
 	}
-	// Closing a response body only releases the connection after its result is handled.
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 500 {
@@ -363,14 +367,22 @@ func (v *CVEVerifier) checkCVE(ctx context.Context, id string) (bool, error) {
 		}
 		if time.Since(cached.CachedAt) < ttl {
 			v.mu.Unlock()
-			return cached.Exists, nil
+			meta, err := v.supplementCNA(ctx, id)
+			if err != nil {
+				return false, err
+			}
+			return meta.Exists, nil
 		}
 		delete(v.cache, id)
 	}
 	v.mu.Unlock()
 	exists, nvdErr := v.checkNVD(ctx, id)
 	if exists && nvdErr == nil {
-		return true, nil
+		meta, err := v.supplementCNA(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		return meta.Exists, nil
 	}
 	if meta := v.GetMeta(id); meta != nil && meta.Verification.Status == "rejected" {
 		return false, nil
@@ -415,9 +427,7 @@ func (v *CVEVerifier) checkCVEProgram(ctx context.Context, id string) (*CVEMeta,
 			State string `json:"state"`
 		} `json:"cveMetadata"`
 		Containers struct {
-			CNA struct {
-				Descriptions []nvdDescription `json:"descriptions"`
-			} `json:"cna"`
+			CNA cnaSourceRecord `json:"cna"`
 		} `json:"containers"`
 	}
 	if err := json.Unmarshal(body, &record); err != nil {
@@ -443,11 +453,210 @@ func (v *CVEVerifier) checkCVEProgram(ctx context.Context, id string) (*CVEMeta,
 			break
 		}
 	}
+	meta.CNAChecked = true
+	if meta.Exists {
+		meta.CNAFacts, meta.CNAGap = record.Containers.CNA.sourceFacts(id)
+	}
 	return meta, nil
+}
+
+// Supplement a verified NVD identity with the CNA fields NVD's metadata model
+// does not retain. The optional request is singleflight, bounded and cached
+// with this record. It cannot turn an outage or mismatched response into an
+// unverified identity, a fixed version, or a claim that no fixed release exists.
+func (v *CVEVerifier) supplementCNA(ctx context.Context, id string) (*CVEMeta, error) {
+	for {
+		v.mu.Lock()
+		meta := v.cache[id]
+		if meta == nil {
+			v.mu.Unlock()
+			return nil, fmt.Errorf("CVE metadata expired during supplemental evidence lookup for %s", id)
+		}
+		if !meta.Exists || meta.Verification.Status != "verified" || meta.Verification.Source != "nvd" || meta.CNAChecked {
+			v.mu.Unlock()
+			return meta, nil
+		}
+		if pending := v.cnaInFlight[id]; pending != nil {
+			v.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return meta, ctx.Err()
+			case <-pending:
+				continue
+			}
+		}
+		if v.cnaInFlight == nil {
+			v.cnaInFlight = make(map[string]chan struct{})
+		}
+		pending := make(chan struct{})
+		v.cnaInFlight[id] = pending
+		v.mu.Unlock()
+
+		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		primary, err := v.checkCVEProgram(lookupCtx, id)
+		cancel()
+		updated := *meta // Cached records are immutable to concurrent GetMeta readers.
+		updated.CNAChecked = true
+		switch {
+		case err != nil:
+			// This status is included in model evidence. Keep transport details
+			// out of it while retaining explicit uncertainty about coverage.
+			updated.CNAGap = "unknown: CNA affected, remediation and prerequisite coverage unavailable"
+		case primary.Exists:
+			updated.CNAFacts, updated.CNAGap = primary.CNAFacts, primary.CNAGap
+		case primary.Verification.Status == "rejected" || primary.Verification.Status == "reserved":
+			// An explicit primary identity contradiction is not an outage.
+			updated.Exists = false
+			updated.Verification = primary.Verification
+			updated.Verification.Source = "nvd+cve_program"
+			updated.CNAGap = "CVE Program identity state conflicts with the cached NVD listing"
+		default:
+			updated.CNAGap = "unknown: CNA record is not available; affected, remediation and prerequisite coverage is incomplete"
+		}
+		v.mu.Lock()
+		if current := v.cache[id]; ctx.Err() == nil && current != nil && current.Exists && current.Verification.Status == "verified" && current.Verification.Source == "nvd" {
+			// A concurrent NVD response may have replaced the metadata while
+			// this primary request ran. Keep its NVD fields and attach the one
+			// completed primary result instead of discarding the fetched evidence.
+			merged := *current
+			copyCNAEvidence(&merged, &updated)
+			v.cache[id] = &merged
+		}
+		delete(v.cnaInFlight, id)
+		close(pending)
+		current := v.cache[id]
+		v.mu.Unlock()
+		if ctx.Err() != nil {
+			return current, ctx.Err()
+		}
+		if current == nil {
+			// Cache eviction must not panic or turn a positive verified lookup
+			// into a negative identity. Verify records unavailable if the entry
+			// was evicted before it can persist the verification metadata.
+			return &updated, nil
+		}
+		return current, nil
+	}
+}
+
+func copyCNAEvidence(target, source *CVEMeta) {
+	target.CNAFacts, target.CNAGap, target.CNAChecked = source.CNAFacts, source.CNAGap, source.CNAChecked
+	if !source.Exists && (source.Verification.Status == "rejected" || source.Verification.Status == "reserved") {
+		target.Exists, target.Verification = false, source.Verification
+	}
+}
+
+// cnaSourceFact retains source fields rather than inferred fixes or privilege
+// roles. Product-scoped fields stay attached to the product that supplied them.
+type cnaSourceFact struct {
+	CVEID   string `json:"cve_id"`
+	Product string `json:"product,omitempty"`
+	Kind    string `json:"kind"`
+	Text    string `json:"text"`
+}
+
+type cnaSourceRecord struct {
+	Descriptions []nvdDescription `json:"descriptions"`
+	Affected     []struct {
+		Vendor        string          `json:"vendor"`
+		Product       string          `json:"product"`
+		PackageName   string          `json:"packageName,omitempty"`
+		DefaultStatus string          `json:"defaultStatus,omitempty"`
+		Platforms     []string        `json:"platforms,omitempty"`
+		Versions      json.RawMessage `json:"versions,omitempty"`
+	} `json:"affected"`
+	Solutions   []nvdDescription  `json:"solutions"`
+	Workarounds []nvdDescription  `json:"workarounds"`
+	Metrics     []json.RawMessage `json:"metrics"`
+}
+
+const maxCNAEvidenceBytes = 12000
+
+func (record cnaSourceRecord) sourceFacts(id string) ([]cnaSourceFact, string) {
+	var facts []cnaSourceFact
+	size, truncated := 0, false
+	add := func(product, kind, text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		fact := cnaSourceFact{CVEID: id, Product: product, Kind: kind, Text: text}
+		raw, _ := json.Marshal(fact)
+		if size+len(raw) > maxCNAEvidenceBytes || len(facts) >= 80 {
+			truncated = true
+			return
+		}
+		size += len(raw)
+		facts = append(facts, fact)
+	}
+	// A record-wide solution is only product-scoped when the source contains
+	// exactly one product. A multi-product record never transfers one product's
+	// fixed version to a neighboring product.
+	product := ""
+	if len(record.Affected) == 1 {
+		product = record.Affected[0].Product
+	}
+	for _, solution := range record.Solutions {
+		if strings.EqualFold(solution.Lang, "en") {
+			add(product, "solution", solution.Value)
+		}
+	}
+	for _, workaround := range record.Workarounds {
+		if strings.EqualFold(workaround.Lang, "en") {
+			add(product, "workaround", workaround.Value)
+		}
+	}
+	for _, metric := range record.Metrics {
+		if json.Valid(metric) {
+			var compact strings.Builder
+			// Re-encoding removes only JSON whitespace, retaining metric meaning.
+			var value any
+			if json.Unmarshal(metric, &value) == nil {
+				raw, _ := json.Marshal(value)
+				compact.Write(raw)
+				add(product, "metric", compact.String())
+			}
+		}
+	}
+	for _, affected := range record.Affected {
+		raw, _ := json.Marshal(affected)
+		add(affected.Product, "affected", string(raw))
+	}
+	for _, description := range record.Descriptions {
+		if strings.EqualFold(description.Lang, "en") {
+			add(product, "description", description.Value)
+		}
+	}
+	gap := ""
+	hasRemediation := false
+	for _, fact := range facts {
+		if fact.Kind == "solution" || fact.Kind == "workaround" {
+			hasRemediation = true
+		}
+	}
+	if !hasRemediation {
+		gap = "unknown: usable remediation is not present in retained CNA evidence; this does not establish the absence of a fixed release"
+	}
+	if truncated {
+		gap += "; CNA evidence size limit omitted additional fields; completeness requires confirmation"
+	}
+	return facts, strings.TrimPrefix(gap, "; ")
 }
 
 func (v *CVEVerifier) cacheMeta(id string, meta *CVEMeta) {
 	v.mu.Lock()
+	if existing := v.cache[id]; existing != nil && existing.CNAChecked && meta.Exists && meta.Verification.Source == "nvd" {
+		ttl := cveCacheTTL
+		if !existing.Exists {
+			ttl = 5 * time.Minute
+		}
+		if time.Since(existing.CachedAt) < ttl {
+			// A late response from an overlapping NVD request must not erase a
+			// still-fresh CNA supplement and start another identical lookup.
+			merged := *meta
+			copyCNAEvidence(&merged, existing)
+			meta = &merged
+		}
+	}
 	// Evict oldest entries if cache exceeds max size.
 	if len(v.cache) >= cveCacheMaxSize {
 		cutoff := time.Now().Add(-cveCacheTTL)

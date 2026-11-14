@@ -26,7 +26,7 @@ func groundedHuntLeadPipeline(t *testing.T, grounded bool, groundingErr error, g
 					DataNeeded: []string{"Task creation events"}, Evidence: "The loader creates a scheduled task named Updater.",
 				}}
 				return nil
-			case groundingSystem:
+			case groundingClaimsSystem:
 				*groundingCalls++
 				if !strings.Contains(prompt, "Scheduled tasks named Updater") {
 					return fmt.Errorf("grounding was not run on the repaired brief")
@@ -90,7 +90,7 @@ func TestHuntLeadRepairGroundsOnlyTheAddedLeads(t *testing.T) {
 					DataNeeded: []string{"Task creation events"}, Evidence: "The loader creates a scheduled task named Updater.",
 				}}
 				return nil
-			case groundingSystem:
+			case groundingClaimsSystem:
 				// A whole-brief check would see the pipeline-added field and fail.
 				out.(*GroundingResult).Grounded = !strings.Contains(prompt, "Deterministic enrichment text")
 				return nil

@@ -13,7 +13,7 @@ import (
 )
 
 // Increment when source interpretation, prompts or validation semantics change.
-const processingPolicyVersion = "evidence-quality-2026-11-14-v1"
+const processingPolicyVersion = "evidence-quality-2026-11-14-v2"
 
 type processingCandidate struct {
 	PolicyKey         string
@@ -42,8 +42,8 @@ func configuredRetryBackoff(d time.Duration) time.Duration {
 	return d
 }
 func (p *Pipeline) processingKey(item scraper.RawItem) string {
-	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema})
-	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + briefPrompt + groundingSystem + groundingRepairSystemPrompt + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
+	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema, groundingReportSchema, claimGroundingReportSchema})
+	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(string(schemas)+prompts+processingPolicyVersion+"\x00"+llm.CachePolicyVersion+"\x00"+p.processingPolicy+"\x00"+item.EvidenceRevision())))
 }
 func (p *Pipeline) processingPolicyKey() string { return p.processingKey(scraper.RawItem{}) }

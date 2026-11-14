@@ -138,7 +138,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	if len(state.Issues) > 0 {
 		groundingResult = &GroundingResult{Issues: state.Issues}
 	} else {
-		groundingResult, groundingErr = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding"}), item.Title, groundingSource(item), groundingView(cleanedYAML, item.URL))
+		groundingResult, groundingErr = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding"}), item.Title, p.groundingEvidence(item, cleanedYAML), groundingView(cleanedYAML, item.URL))
 	}
 	if groundingErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(groundingErr, ctxErr) {
@@ -155,7 +155,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
 			return err
 		}
-		repaired, err := p.grounding.Repair(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_repair"}), item.Title, groundingSource(item), cleanedYAML, groundingResult.Issues)
+		repaired, err := p.grounding.Repair(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_repair"}), item.Title, p.groundingEvidence(item, cleanedYAML), cleanedYAML, groundingResult.Issues)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 				return ctxErr
@@ -184,7 +184,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
 			return err
 		}
-		groundingResult, err = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_recheck"}), item.Title, groundingSource(item), groundingView(cleanedYAML, item.URL))
+		groundingResult, err = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_recheck"}), item.Title, p.groundingEvidence(item, cleanedYAML), groundingView(cleanedYAML, item.URL))
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 				return ctxErr

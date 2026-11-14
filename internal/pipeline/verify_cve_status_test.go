@@ -13,6 +13,11 @@ func TestCVEVerifierChecksEveryIDDeterministically(t *testing.T) {
 	var calls []string
 	v := NewCVEVerifier(nil, nil)
 	v.client = &http.Client{Transport: &mockNVDTransport{handler: func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "cveawg.mitre.org" {
+			rec := httptest.NewRecorder()
+			rec.WriteHeader(http.StatusServiceUnavailable)
+			return rec.Result(), nil
+		}
 		id := req.URL.Query().Get("cveId")
 		calls = append(calls, id)
 		rec := httptest.NewRecorder()

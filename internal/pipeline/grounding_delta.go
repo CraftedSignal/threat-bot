@@ -39,7 +39,7 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 	if err != nil {
 		return nil, err
 	}
-	result, err := g.Check(ctx, item.Title, groundingSource(item), string(rendered))
+	result, err := g.checkClaims(ctx, item.Title, groundingSource(item), string(rendered))
 	if err != nil || !result.Grounded {
 		return result, err
 	}

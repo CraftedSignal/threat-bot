@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -41,9 +42,8 @@ func (g *GroundingChecker) WithLogger(logger *slog.Logger) *GroundingChecker {
 	return g
 }
 
-// GroundingResult holds the result of a grounding check. Issues holds only
-// the kept issues (unsupported claims quoted verbatim from the brief), each
-// formatted as "field: reason (quote)".
+// GroundingResult holds factual blockers: unsupported claims or material,
+// source-quoted omissions from a complete brief.
 type GroundingResult struct {
 	Grounded bool     `json:"grounded"`
 	Issues   []string `json:"issues"`
@@ -51,16 +51,19 @@ type GroundingResult struct {
 
 // Issue kinds the checker can report.
 const (
-	groundingKindUnsupported = "unsupported_claim"
-	groundingKindOmission    = "omission"
+	groundingKindUnsupported      = "unsupported_claim"
+	groundingKindOmission         = "omission"
+	groundingKindMaterialOmission = "material_omission"
 )
 
 // groundingIssue is one finding of the structured grounding check.
 type groundingIssue struct {
-	Kind       string `json:"kind" enum:"unsupported_claim,omission"`
-	Field      string `json:"field"`
-	BriefQuote string `json:"brief_quote"`
-	Reason     string `json:"reason"`
+	Kind        string `json:"kind" enum:"unsupported_claim,omission,material_omission"`
+	Field       string `json:"field"`
+	BriefQuote  string `json:"brief_quote"`
+	Reason      string `json:"reason"`
+	Subject     string `json:"subject"`
+	SourceQuote string `json:"source_quote"`
 }
 
 // groundingReport is the structured answer of the grounding check.
@@ -69,6 +72,17 @@ type groundingReport struct {
 }
 
 var groundingReportSchema = llm.MustSchemaOf[groundingReport]()
+
+type claimGroundingIssue struct {
+	Kind       string `json:"kind" enum:"unsupported_claim"`
+	Field      string `json:"field"`
+	BriefQuote string `json:"brief_quote"`
+	Reason     string `json:"reason"`
+}
+
+var claimGroundingReportSchema = llm.MustSchemaOf[struct {
+	Issues []claimGroundingIssue `json:"issues"`
+}]()
 
 const maxSourceLen = 24000
 
@@ -95,13 +109,9 @@ func nonFactualRatingIssue(issue groundingIssue, brief string) bool {
 	return false
 }
 
-const groundingSystem = `You are a fact-checking assistant for threat intelligence briefs. Your job is to compare a generated brief against the original source material and report statements in the brief that the source does NOT support.
+const groundingFactSystem = `You are a fact-checking assistant for threat intelligence briefs. Compare the supplied claims with the source for factual accuracy.
 
 Report only statements that are present in the brief and that the source does not support or clearly derive. For each, set kind to "unsupported_claim", name the brief field, quote the statement VERBATIM from the brief in brief_quote, and explain in reason why the source does not support it.
-
-Information that the source contains but the brief leaves out is not an unsupported claim: report it with kind "omission" (brief_quote may then be empty). Omissions are advisory only.
-
-If every statement in the brief is supported, return an empty issues array.
 
 Check substantive claims in title, summary, content, CVEs, IOCs, affected assets, techniques, and action evidence.
 
@@ -109,16 +119,114 @@ The severity field is an operational urgency label, not a quoted claim: do not f
 
 ` + exploitationStatesDefinition + ` Flag confirmed_active only when the source does not report exploitation, and not_observed only when the source reports it.`
 
+const groundingSystem = groundingFactSystem + `
+
+Also check material completeness of this entire brief. If an explicit source fact is missing and changes applicability or the defender response, report kind "material_omission". This includes affected products/version ranges, fixed releases or remediation, authentication/privilege requirements, required dependencies or user interaction, and concrete impact limits. Set subject to the target product name or CVE, source_quote to a VERBATIM source passage containing that subject and the missing fact, and field to the field needing repair. Include identifying context, not a bare version or prerequisite detached from its product. Do not borrow a neighboring product's version, role, fix or CVE. Do not report a fact already covered in another brief field as omitted. Brief_quote may be empty for omissions.
+
+Missing minor background, credits, or incidental details can be kind "omission" and are advisory. Unspecified source facts are gaps, not facts to invent: do not demand a fixed release, role, impact, exploit chain, detector or IOC that the supplied source does not establish. Use empty subject/source_quote for unsupported claims and minor omissions.
+
+Return an empty issues array only when statements are supported and no material source fact is omitted.`
+
+const groundingClaimsSystem = groundingFactSystem + `
+
+This is a partial incoming claim set or an added hunt lead, not an entire brief. Check only statements present. Do not demand omitted applicability, remediation or other full-brief fields. Report only unsupported_claim findings. Return an empty issues array when every supplied claim is supported.`
+
 // normalizeForQuote collapses whitespace and lowercases s so a model quote can
 // be compared against the brief regardless of YAML line wrapping.
 func normalizeForQuote(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
 }
 
+// A material omission may request adding a claim. Unlike an unsupported-claim
+// report, it therefore needs verifiable source text and an existing target.
+// Malformed or cross-target findings defer through the normal bounded retry
+// path rather than being trusted as repair instructions or silently accepted.
+func validateMaterialOmission(issue groundingIssue, source, brief string) error {
+	quote, subject := normalizeForQuote(issue.SourceQuote), normalizeForQuote(issue.Subject)
+	if quote == "" || subject == "" || len(issue.SourceQuote) > 4000 {
+		return fmt.Errorf("material omission requires a verbatim source quote with its target subject")
+	}
+	doc := parseBriefFrontmatter(brief)
+	ids := groundingTargetCVEs(doc)
+	matched := false
+	if id := normalizeCVEID(issue.Subject); id != "" {
+		matched = ids[id]
+	} else {
+		for _, product := range yamlStringList(doc["affected_products"]) {
+			if scopeProductKey(product) == scopeProductKey(issue.Subject) {
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
+		return fmt.Errorf("material omission subject does not match the brief target")
+	}
+	// Structured primary evidence carries identity/product outside its text
+	// value. Bind a complete verbatim field to that explicit scope rather than
+	// requiring the CVE identifier to be repeated inside an ordinary sentence.
+	scoped := materialQuoteInScopedFact(issue, source, doc)
+	mentionsSubject := strings.Contains(quote, subject) || productNameLocation(issue.SourceQuote, issue.Subject) != nil
+	if !scoped && (!strings.Contains(normalizeForQuote(source), quote) || !mentionsSubject) {
+		return fmt.Errorf("material omission requires a verbatim source quote with its target subject")
+	}
+	for _, id := range sourceCVEPattern.FindAllString(issue.SourceQuote, -1) {
+		if !ids[strings.ToUpper(id)] {
+			return fmt.Errorf("material omission quote belongs to another CVE")
+		}
+	}
+	return nil
+}
+
+func materialQuoteInScopedFact(issue groundingIssue, source string, doc map[string]any) bool {
+	ids := groundingTargetCVEs(doc)
+	subjectID := normalizeCVEID(issue.Subject)
+	products := yamlStringList(doc["affected_products"])
+	for _, line := range strings.Split(source, "\n") {
+		var fact cnaSourceFact
+		if json.Unmarshal([]byte(line), &fact) != nil || !ids[fact.CVEID] || normalizeForQuote(fact.Text) != normalizeForQuote(issue.SourceQuote) {
+			continue
+		}
+		switch fact.Kind {
+		case "affected", "solution", "workaround", "metric", "description":
+		default:
+			continue
+		}
+		if subjectID != "" {
+			if fact.CVEID != subjectID {
+				continue
+			}
+		} else if scopeProductKey(fact.Product) != scopeProductKey(issue.Subject) {
+			continue
+		}
+		if len(products) > 0 {
+			productMatch := false
+			for _, product := range products {
+				if fact.Product != "" && scopeProductKey(fact.Product) == scopeProductKey(product) || fact.Product == "" && productNameLocation(fact.Text, product) != nil {
+					productMatch = true
+				}
+			}
+			if !productMatch {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // Check compares the brief YAML against the original source content and
 // returns a GroundingResult indicating whether the brief is grounded. Every
-// unsupported claim counts; omissions are logged at Info and dropped.
+// unsupported claim and validated material omission counts.
 func (g *GroundingChecker) Check(ctx context.Context, sourceTitle, sourceContent, briefYAML string) (*GroundingResult, error) {
+	return g.check(ctx, sourceTitle, sourceContent, briefYAML, true)
+}
+
+func (g *GroundingChecker) checkClaims(ctx context.Context, sourceTitle, sourceContent, briefYAML string) (*GroundingResult, error) {
+	return g.check(ctx, sourceTitle, sourceContent, briefYAML, false)
+}
+
+func (g *GroundingChecker) check(ctx context.Context, sourceTitle, sourceContent, briefYAML string, completeness bool) (*GroundingResult, error) {
 	source := sourceTitle + "\n\n" + sourceContent
 	if len(source) > maxSourceLen {
 		source = truncateUTF8(source, maxSourceLen)
@@ -130,24 +238,38 @@ func (g *GroundingChecker) Check(ctx context.Context, sourceTitle, sourceContent
 ## Generated Brief (YAML)
 %s
 
-Report only statements present in the brief that the source does not support, quoting each verbatim in brief_quote. Missing information is kind "omission".`, source, briefYAML)
+Assess the supplied YAML according to the system instructions, with verbatim quotes for factual blockers.`, source, briefYAML)
+	system := groundingClaimsSystem
+	schema := claimGroundingReportSchema
+	if completeness {
+		system = groundingSystem
+		schema = groundingReportSchema
+	}
 
 	var report groundingReport
-	if err := g.llm.GenerateStructured(ctx, prompt, groundingSystem, groundingReportSchema, &report); err != nil {
+	if err := g.llm.GenerateStructured(ctx, prompt, system, schema, &report); err != nil {
 		return nil, fmt.Errorf("grounding check LLM call: %w", err)
 	}
 
 	normalizedBrief := normalizeForQuote(briefYAML)
 	result := &GroundingResult{Issues: identityGroundingIssues(sourceTitle+"\n"+sourceContent, briefYAML)}
 	for _, issue := range report.Issues {
+		if !completeness && issue.Kind != groundingKindUnsupported {
+			return nil, fmt.Errorf("partial grounding returned an invalid issue kind %q", issue.Kind)
+		}
+		if issue.Kind == groundingKindMaterialOmission {
+			if err := validateMaterialOmission(issue, source, briefYAML); err != nil {
+				return nil, fmt.Errorf("grounding completeness evidence: %w", err)
+			}
+			result.Issues = append(result.Issues, fmt.Sprintf("%s: missing source-supported fact for %s: %s (source: %s)", issue.Field, issue.Subject, issue.Reason, issue.SourceQuote))
+			continue
+		}
 		if nonFactualRatingIssue(issue, briefYAML) {
 			g.logger.Info("grounding rating issue dropped", "field", issue.Field, "reason", issue.Reason)
 			continue
 		}
 		if issue.Kind == groundingKindOmission {
-			// Completeness is not grounding: leaving out a source fact makes no
-			// false claim, and Repair (which only removes claims) could never
-			// converge on it.
+			// Minor omissions do not change applicability or defender response.
 			g.logger.Info("grounding issue dropped", "kind", issue.Kind, "field", issue.Field, "reason", issue.Reason)
 			continue
 		}
@@ -167,7 +289,7 @@ Report only statements present in the brief that the source does not support, qu
 
 // groundingRepairSystemPrompt is the repair call's system prompt. Rules in the
 // revised brief use the same structured Sigma form as the original answer.
-const groundingRepairSystemPrompt = "Revise the threat brief to contain only claims supported by the supplied source.\n\n" + sigmaStructureGuidance
+const groundingRepairSystemPrompt = "Revise the threat brief to contain only claims supported by the supplied source and restore missing source-supported facts that change applicability or remediation. Do not invent unspecified versions, roles, dependencies, impact, exploitation or detectors; preserve canonical identity and explicit uncertainty.\n\n" + sigmaStructureGuidance
 
 // Repair asks the model to remove unsupported claims once, using the same
 // source material the checker saw. The caller must validate and re-check the
@@ -183,10 +305,14 @@ func (g *GroundingChecker) Repair(ctx context.Context, sourceTitle, sourceConten
 Rejected YAML:
 %s
 
-Unsupported claims:
+Factual blockers (unsupported claims and missing source-supported facts):
 %s
 
-Return the complete revised brief. Remove unsupported claims, invented attack stages,
+Return the complete revised brief. Restore material facts from their quoted source
+passages, with the correct product/CVE scope, even when the revision removes other
+claims. Include supported affected ranges, fixed releases/remediation, privileges,
+dependencies, interaction and impact limits; explicitly retain unknowns when the
+source does not specify them. Remove unsupported claims, invented attack stages,
 affected versions, fixed versions, CVEs, IOCs, and mitigations. Preserve the
 identity fields and source reference. A short verified notice is better than a
 detailed speculative brief. If exploitation_evidence is present, its status

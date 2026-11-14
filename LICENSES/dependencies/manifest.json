@@ -30,13 +30,13 @@
       "files": [
         {
           "bytes": 34523,
-          "path": "LICENSES/dependencies/github.com/craftedsignal/sigma-parser/v0.4.2-0.20261114094447-542844e5e5b1/LICENSE",
+          "path": "LICENSES/dependencies/github.com/craftedsignal/sigma-parser/v0.4.2-0.20261114141751-dc3a797a75a1/LICENSE",
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
         }
       ],
-      "go_sum": "h1:USUyV45mbFwbSJPnyrmURP8qtKBnH2t6GHYoWn9piL4=",
+      "go_sum": "h1:qV/x0odyd3fDLFhWkbfZ2hH5+mGFUcj2caakVsAJn4U=",
       "module": "github.com/craftedsignal/sigma-parser",
-      "version": "v0.4.2-0.20261114094447-542844e5e5b1"
+      "version": "v0.4.2-0.20261114141751-dc3a797a75a1"
     },
     {
       "files": [

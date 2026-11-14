@@ -73,3 +73,39 @@ condition: selection and not filter
 		})
 	}
 }
+
+func TestParserAdoptionLimitIsProblemButWarningIsNot(t *testing.T) {
+	logSource := LogSource{Category: "process_creation", Product: "windows"}
+	warningOnly := detection(t, "selection:\n  CommandLine: -dump\ncondition: selection\n")
+	if problems, warnings := CheckDetection(warningOnly); len(problems) != 0 || len(warnings) == 0 {
+		t.Fatalf("warning-only detection: problems=%q warnings=%q", problems, warnings)
+	}
+	if problems := Problems("Warning only", logSource, warningOnly); len(problems) != 0 {
+		t.Fatalf("warning-only rule rejected: %q", problems)
+	}
+
+	oversized := map[string]any{"selection": map[string]any{"CommandLine": strings.Repeat("x", 1<<20)}, "condition": "selection"}
+	problems, warnings := CheckDetection(oversized)
+	if len(problems) == 0 || len(warnings) != 0 || !strings.Contains(strings.Join(problems, " "), "limit") {
+		t.Fatalf("limit detection: problems=%q warnings=%q", problems, warnings)
+	}
+	if problems := Problems("Oversized", logSource, oversized); len(problems) == 0 {
+		t.Fatal("oversized detection was accepted")
+	}
+}
+
+func TestParserAdoptionRejectsMalformedAuthoredValues(t *testing.T) {
+	for name, selection := range map[string]map[string]any{
+		"empty selection":    {},
+		"empty value list":   {"CommandLine": []any{}},
+		"textual existence":  {"CommandLine|exists": "true"},
+		"scalar conjunction": {"CommandLine|contains|all": "-dump"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			detection := map[string]any{"selection": selection, "condition": "selection"}
+			if problems := Problems("Malformed authored value", LogSource{Category: "process_creation", Product: "windows"}, detection); len(problems) == 0 {
+				t.Fatal("malformed authored value was accepted")
+			}
+		})
+	}
+}

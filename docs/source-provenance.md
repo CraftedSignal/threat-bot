@@ -16,3 +16,10 @@ retain compatible processing keys; public regression inputs are fictional.
 Supplemental evidence lookup failures use a fixed uncertainty category rather
 than forwarding transport diagnostics into model input. This port also excludes
 the historical Git ancestry, captured fixtures and internal planning files.
+
+The final Sigma parser adoption follows first-party application commit
+`2f91b308f590f17870ac6dc909642bc5b5c74606`, using the same pinned parser revision
+`dc3a797a75a1`. Pipeline, publisher and shared Sigma checks retain warning-only
+rules and reject parser limits and malformed authored values. The added
+regressions use synthetic rules; processing schemas, policy keys, persisted
+identifiers and checkpoint semantics are unchanged by this dependency adoption.

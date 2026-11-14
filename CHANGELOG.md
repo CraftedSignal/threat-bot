@@ -12,5 +12,6 @@ This file records user-visible changes. No tagged release is implied by an entry
 - Harden outbound requests, operational diagnostics, persistence failure handling, and build inputs during source preparation.
 - Share deterministic narrative/action-plan readiness across pipeline and feed validation; retain editorial merge holds and bounded retries across restart.
 - Restore validated material source facts within bounded grounding repair, keep partial-claim checks separate, and preserve compatible processing checkpoints during the rename.
+- Adopt the final bounded Sigma parser used by the deployed application, rejecting malformed authored values while retaining warning-only rules and parser-limit publication checks.
 
 Before upgrading an existing installation, review the exact release notes, validate configuration, back up SQLite, and test with publishing disabled. Existing feed identities and compatibility fields remain separate from the application's renamed command/module.

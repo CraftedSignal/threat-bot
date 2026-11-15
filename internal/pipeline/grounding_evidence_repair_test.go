@@ -14,22 +14,47 @@ import (
 // corrected quote and retain every original factual blocker.
 type evidenceRepairLLM struct {
 	noopLLM
-	report groundingReport
-	answer string
-	err    error
-	calls  int
+	report       groundingReport
+	answer       string
+	err          error
+	calls        int
+	repairSchema *llm.Schema
 }
 
-func (c *evidenceRepairLLM) GenerateStructured(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+func (c *evidenceRepairLLM) GenerateStructured(_ context.Context, _, _ string, schema *llm.Schema, out any) error {
 	c.calls++
 	if c.calls == 1 {
 		*out.(*groundingReport) = c.report
 		return nil
 	}
+	c.repairSchema = schema
 	if c.err != nil {
 		return c.err
 	}
 	return llm.DecodeStructured(c.answer, out)
+}
+
+func TestGroundingEvidenceRepairUsesVertexCompatibleSubjectSchema(t *testing.T) {
+	client := &evidenceRepairLLM{
+		report: groundingReport{Issues: []groundingIssue{{Kind: groundingKindMaterialOmission, Field: "content", Subject: "Example Harbor", Reason: "Missing the fixed release."}}},
+		answer: `{"evidence":[{"subject":"Example Harbor","source_quote":"Example Harbor is fixed in 2.4."}]}`,
+	}
+	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", syntheticCompletenessSource, syntheticIncompleteBrief)
+	if err != nil || result == nil || result.Grounded || client.repairSchema == nil {
+		t.Fatalf("evidence repair must reach normal blocking validation: result=%+v err=%v", result, err)
+	}
+	// Vertex rejects empty enum members with HTTP 400 before generating an
+	// answer. Unsupported evidence can instead leave source_quote empty.
+	subject := client.repairSchema.Properties["evidence"].Items.Properties["subject"]
+	eligible := materialOmissionSubjects(syntheticIncompleteBrief)
+	if len(subject.Enum) != len(eligible) {
+		t.Fatalf("repair schema must constrain subjects to eligible brief targets: got %q want %q", subject.Enum, eligible)
+	}
+	for i, value := range subject.Enum {
+		if value == "" || value != eligible[i] {
+			t.Fatalf("repair schema contains an invalid subject enum member: %q", subject.Enum)
+		}
+	}
 }
 
 func TestGroundingRepairsMalformedOmissionEvidenceWithoutDroppingBlockers(t *testing.T) {

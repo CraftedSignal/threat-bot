@@ -13,7 +13,7 @@ import (
 )
 
 // Increment when source interpretation, prompts or validation semantics change.
-const processingPolicyVersion = "evidence-quality-2026-11-14-v2"
+const processingPolicyVersion = "evidence-quality-2026-11-15-v3"
 
 type processingCandidate struct {
 	PolicyKey         string

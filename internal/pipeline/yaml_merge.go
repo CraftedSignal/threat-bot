@@ -352,7 +352,7 @@ func mergeStringList(fm map[string]any, key string, newVals []string) bool {
 	if v, ok := fm[key].([]any); ok {
 		existing = v
 	}
-	seen := make(map[string]struct{}, len(existing)+len(newVals))
+	seen := make(map[string]struct{}, len(existing))
 	for _, e := range existing {
 		if s, ok := e.(string); ok {
 			seen[strings.ToLower(strings.TrimSpace(s))] = struct{}{}
@@ -388,7 +388,7 @@ func mergeIOCList(fm map[string]any, newIOCs []ExtractedIOC) bool {
 	if v, ok := fm["iocs"].([]any); ok {
 		existing = v
 	}
-	seen := make(map[string]struct{}, len(existing)+len(newIOCs))
+	seen := make(map[string]struct{}, len(existing))
 	keyFor := func(t, val string) string {
 		return strings.ToLower(strings.TrimSpace(t)) + "|" + strings.TrimSpace(val)
 	}

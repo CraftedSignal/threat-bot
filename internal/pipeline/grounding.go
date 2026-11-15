@@ -371,7 +371,7 @@ func mergeGroundingRepair(original map[string]any, revised revisedBrief) (map[st
 	if err != nil {
 		return nil, err
 	}
-	merged := make(map[string]any, len(original)+len(doc))
+	merged := make(map[string]any, len(original))
 	for key, value := range original {
 		if !repairOwnedKeys[key] {
 			merged[key] = value

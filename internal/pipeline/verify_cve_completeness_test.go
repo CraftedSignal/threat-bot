@@ -69,7 +69,9 @@ func TestCVEVerifierOptionalCNAGapPreservesNVDVerification(t *testing.T) {
 	for _, mode := range []string{"unavailable", "identity mismatch"} {
 		t.Run(mode, func(t *testing.T) {
 			v := NewCVEVerifier(nil, nil)
-			v.cache["CVE-2099-4001"] = &CVEMeta{Exists: true, Verification: CVEVerification{Status: "verified", Source: "nvd"}, Description: "Example Harbor permits object injection.", CachedAt: time.Now()}
+			// A timestamp containing "2.4" must not be mistaken for a fixed-version claim.
+			cachedAt := time.Now().Add(-time.Hour).Truncate(time.Minute).Add(2*time.Second + 400*time.Millisecond)
+			v.cache["CVE-2099-4001"] = &CVEMeta{Exists: true, Verification: CVEVerification{Status: "verified", Source: "nvd"}, Description: "Example Harbor permits object injection.", CachedAt: cachedAt}
 			primary := strings.ReplaceAll(string(syntheticCompletenessCNA(t)), "CVE-2099-4001", "CVE-2099-4002")
 			calls := 0
 			v.client = &http.Client{Transport: &mockNVDTransport{handler: func(req *http.Request) (*http.Response, error) {
@@ -96,7 +98,14 @@ func TestCVEVerifierOptionalCNAGapPreservesNVDVerification(t *testing.T) {
 			}
 			meta := v.GetMeta("CVE-2099-4001")
 			raw, _ := json.Marshal(meta)
-			if meta.Verification.Status != "verified" || !strings.Contains(strings.ToLower(string(raw)), "unknown") || strings.Contains(string(raw), "2.4") || strings.Contains(string(raw), "no fixed") {
+			if !meta.Exists || meta.Verification.Status != "verified" || meta.Verification.Source != "nvd" || meta.Description != "Example Harbor permits object injection." {
+				t.Fatalf("optional failure changed NVD verification: %s", raw)
+			}
+			if !meta.CNAChecked || len(meta.CNAFacts) != 0 {
+				t.Fatalf("optional failure retained unverified CNA facts or lost lookup status: %s", raw)
+			}
+			gap := strings.ToLower(meta.CNAGap)
+			if !strings.Contains(gap, "unknown") || !strings.Contains(gap, "unavailable") || strings.Contains(gap, "2.4") || strings.Contains(gap, "no fixed") {
 				t.Fatalf("missing or misleading evidence-gap status: %s", raw)
 			}
 			if calls != 1 {

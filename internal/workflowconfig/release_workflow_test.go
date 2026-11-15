@@ -52,6 +52,25 @@ func TestReleaseEvaluatesMainPushesAndVersionTagsAfterValidation(t *testing.T) {
 	}
 }
 
+func TestReleaseOwnsPostMergeValidation(t *testing.T) {
+	workflow := readWorkflow(t, "ci.yml")
+	triggers := workflow["on"].(map[string]any)
+	if _, ok := triggers["push"]; ok {
+		t.Fatal("main pushes must run CI through Release, without a second standalone CI run")
+	}
+	if _, ok := triggers["workflow_call"]; !ok {
+		t.Fatal("Release must be able to call the reusable CI workflow")
+	}
+	pr, ok := triggers["pull_request"].(map[string]any)
+	if !ok {
+		t.Fatal("pull requests must run required CI before merging")
+	}
+	branches, ok := pr["branches"].([]any)
+	if !ok || len(branches) != 1 || branches[0] != "main" {
+		t.Fatal("PR checks must cover changes targeting main")
+	}
+}
+
 func TestWorkflowsUsePinnedActionsWithoutSiblingCheckouts(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
 	if err != nil {

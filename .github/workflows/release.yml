@@ -211,10 +211,10 @@ jobs:
                   stop(label + " returned an unexpected response")
               return status, payload
 
-          def confirmed_absent(status, payload, label):
+          def confirmed_absent(status, payload, label, missing_messages=("Not Found",)):
               if status == 200:
                   stop(label + " already exists; use a new version, never overwrite a release")
-              if status != 404 or payload.get("message") != "Not Found":
+              if status != 404 or payload.get("message") not in missing_messages:
                   stop(label + " absence could not be confirmed")
 
           def guard():
@@ -250,7 +250,7 @@ jobs:
               package_url = "https://api.github.com/" + owner_route + "/" + owner + "/packages/container/" + package_name.lower()
               status, package = request_json(package_url, github_auth, "package ownership", True)
               if status == 404:
-                  confirmed_absent(status, package, "package")
+                  confirmed_absent(status, package, "package", ("Not Found", "Package not found."))
               else:
                   linked_repo = package.get("repository") or {}
                   if package.get("package_type") != "container" or package.get("name") != package_name.lower() or linked_repo.get("id") != repository_id:

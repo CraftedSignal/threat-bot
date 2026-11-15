@@ -1,6 +1,6 @@
 # Releases and publication
 
-Pushes to `main` automatically select a version and release after CI passes. GoReleaser builds the binary and source archives; the protected publishing job publishes the verified artifacts and `ghcr.io/craftedsignal/threat-bot` image. Manual version tags are also supported. Repository visibility and production deployment are managed separately.
+Pushes to `main` automatically select a version and release after CI passes, without a separate approval. GoReleaser builds the binary and source archives; the publishing job publishes the verified artifacts and `ghcr.io/craftedsignal/threat-bot` image. Manual version tags are also supported. Repository visibility and production deployment are managed separately.
 
 ## Version and compatibility
 
@@ -22,7 +22,7 @@ Publication of a new source snapshot does not sanitize old Git objects, PRs, Act
 
 ## Artifact release gate
 
-The release workflow runs on main pushes or manual semantic-version tags. It reuses mandatory CI, selects a version, builds GoReleaser archives and a Linux amd64 image, smoke-tests the image, scans artifacts, generates SPDX SBOMs and checksums, and publishes through the `public-release` environment with GitHub provenance attestations. The selected tag must point to the validated source commit on main and is created during publication if needed. A single release concurrency group serializes publication. Configure any required environment reviewers/branch rules separately.
+The release workflow runs on main pushes or manual semantic-version tags. It calls mandatory CI once, selects a version, builds GoReleaser archives and a Linux amd64 image, smoke-tests the image, scans artifacts, generates SPDX SBOMs and checksums, and publishes through the `public-release` environment with GitHub provenance attestations. PRs run CI before merging; main pushes run CI only through Release, avoiding a duplicate standalone run. The selected tag must point to the validated source commit on main and is created during publication if needed. A single release concurrency group serializes publication. The environment permits `main` and version tags without manual reviewers; its policy is managed in the organization's GitHub configuration.
 
 An existing GitHub release or versioned container image blocks publication for that version. The guard also stops on API/authentication/network uncertainty and requires any existing container package to be linked to this repository's immutable ID. It must not inherit ownership from a historical package with the same name. If a run stops after pushing an image, use reviewed recovery or a new version; rerunning must not overwrite the version tag. Hosted API/token behavior remains a release integration check until observed in a real run.
 

@@ -123,8 +123,12 @@ func (p *Pipeline) resumeDiscoveryClaim(ctx context.Context, key string, item sc
 			state.ClaimAssessment.Attempts = 0
 		}
 	}
-	decision, _, entries := p.dedup.CheckPreExtraction(refreshed)
-	return p.finishExtractedItem(ctx, key, state, decision, entries)
+	routing, done, err := p.routePreExtraction(ctx, key, state)
+	if done || err != nil {
+		return err
+	}
+	state.PreCVEs, state.RebuildDraftID = routing.PreCVEs, routing.RebuildDraftID
+	return p.finishExtractedItem(ctx, key, state, routing.Decision, routing.Entries)
 }
 
 func (p *Pipeline) discoveryClaimRetryDelay(attempt int) time.Duration {

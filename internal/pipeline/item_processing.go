@@ -146,72 +146,12 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		}
 	}
 
-	// Cross-source dedup (pre-extraction, cheap regex).
-	dedupDecision, preCVEs, dedupEntries := p.dedup.CheckPreExtraction(item)
-	rebuildDraftID := p.draftRebuildTarget(item, dedupDecision, dedupEntries)
-	if rebuildDraftID != "" && item.Source == "nvd" && item.CorroborationOnly {
-		return p.holdDraftRebuild(key, processingCandidate{AttemptID: attemptID, Item: item, RebuildDraftID: rebuildDraftID}, item.Content, "NVD source correction downgrades or retracts the record; canonical claims require review")
+	routing, done, err := p.routePreExtraction(ctx, key, processingCandidate{AttemptID: attemptID, Item: item, Extraction: mergeExtraction})
+	if done || err != nil {
+		return err
 	}
-	if dedupDecision == DedupNew && item.CorroborationOnly {
-		p.logger.Info("skipping unmatched corroboration-only item", "source_id", item.SourceID, "source", item.Source)
-		if err := p.markSeen(item); err != nil {
-			return fmt.Errorf("recording seen item: %w", err)
-		}
-		return nil
-	}
-	if dedupDecision == DedupSkip {
-		p.logger.Info("skipping cross-source duplicate", "source_id", item.SourceID, "matched_draft", dedupEntries[0].DraftID)
-		if err := p.markSeen(item); err != nil {
-			return fmt.Errorf("recording seen item: %w", err)
-		}
-		return nil
-	}
-	if dedupDecision == DedupMerge && rebuildDraftID == "" {
-		// The matched draft is thin (no CVEs / no IOCs / no
-		// product-with-version). Run extraction on the new item and
-		// union its structured fields into the existing draft so the
-		// next render benefits from the richer source.
-		targetID := dedupEntries[0].DraftID
-		extraction := cloneExtraction(mergeExtraction)
-		var extractErr error
-		if mergeExtraction == nil {
-			extraction, extractErr = p.extractor.Extract(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "extraction"}), item)
-		}
-		if extractErr != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(extractErr, ctxErr) {
-				return ctxErr
-			}
-			return fmt.Errorf("merge extraction unavailable; retaining source for retry: %w", extractErr)
-		}
-		err := p.mergeIntoDraft(ctx, targetID, extraction, item)
-		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-			return ctxErr
-		}
-		switch {
-		case err == nil:
-			p.logger.Info("merged into thin draft", "source_id", item.SourceID, "draft_id", targetID)
-		case errors.Is(err, errMergeReviewRequired):
-			return nil
-		case errors.Is(err, errMergeRelevanceUnavailable):
-			return fmt.Errorf("merge assessment unavailable; retaining source for retry: %w", err)
-		case errors.Is(err, errMergeNotRelevant) && !item.CorroborationOnly:
-			// The relevance check found a separate story that merely matched
-			// this draft: process it as a new item instead of dropping it.
-			p.logger.Info("merge into thin draft refused; processing as new item", "source_id", item.SourceID, "draft_id", targetID, "error", err)
-			dedupDecision = DedupNew
-		default:
-			p.logMergeFailure("merge into thin draft failed", err, "source_id", item.SourceID, "draft_id", targetID)
-		}
-		if dedupDecision != DedupNew {
-			if err := p.markSeen(item); err != nil {
-				return fmt.Errorf("recording seen item: %w", err)
-			}
-			return nil
-		}
-	}
-	if dedupDecision == DedupUpdate {
-		p.logger.Info("processing CVE update", "source_id", item.SourceID, "cves", preCVEs)
-	}
+	dedupDecision, preCVEs := routing.Decision, routing.PreCVEs
+	dedupEntries, rebuildDraftID := routing.Entries, routing.RebuildDraftID
 
 	// Pre-filter: skip items with very short content even after enrichment.
 	// Exploit trackers (exploit-db, sploitus) build their own structured content
@@ -309,6 +249,84 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	}
 	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, RebuildDraftID: rebuildDraftID}
 	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
+}
+
+type preExtractionRouting struct {
+	Decision       DedupDecision
+	PreCVEs        []string
+	Entries        []storage.ContentIndexEntry
+	RebuildDraftID string
+}
+
+// Fresh work and pre-assembly resumes must use the same current routing. A
+// newly covered source can finish without another checker; a new merge still
+// passes the ordinary relevance, delta-grounding and target/review gates.
+func (p *Pipeline) routePreExtraction(ctx context.Context, key string, state processingCandidate) (preExtractionRouting, bool, error) {
+	item := state.Item
+	decision, cves, entries := p.dedup.CheckPreExtraction(item)
+	routing := preExtractionRouting{Decision: decision, PreCVEs: cves, Entries: entries}
+	routing.RebuildDraftID = p.draftRebuildTarget(item, decision, entries)
+	if routing.RebuildDraftID != "" && item.Source == "nvd" && item.CorroborationOnly {
+		state.RebuildDraftID = routing.RebuildDraftID
+		// This is an editorial correction hold, not a claim retry stage.
+		state.Stage, state.ClaimAssessment = "", nil
+		return routing, true, p.holdDraftRebuild(key, state, item.Content, "NVD source correction downgrades or retracts the record; canonical claims require review")
+	}
+	if decision == DedupNew && item.CorroborationOnly {
+		p.logger.Info("skipping unmatched corroboration-only item", "source_id", item.SourceID, "source", item.Source)
+		if err := p.markSeen(item); err != nil {
+			return routing, true, fmt.Errorf("recording seen item: %w", err)
+		}
+		return routing, true, nil
+	}
+	if decision == DedupSkip {
+		p.logger.Info("skipping cross-source duplicate", "source_id", item.SourceID, "matched_draft", entries[0].DraftID)
+		if err := p.markSeen(item); err != nil {
+			return routing, true, fmt.Errorf("recording seen item: %w", err)
+		}
+		return routing, true, nil
+	}
+	if decision == DedupMerge && routing.RebuildDraftID == "" {
+		targetID := entries[0].DraftID
+		extraction := cloneExtraction(state.Extraction)
+		var extractErr error
+		if state.Extraction == nil {
+			extraction, extractErr = p.extractor.Extract(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "extraction"}), item)
+		}
+		if extractErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(extractErr, ctxErr) {
+				return routing, true, ctxErr
+			}
+			return routing, true, fmt.Errorf("merge extraction unavailable; retaining source for retry: %w", extractErr)
+		}
+		err := p.mergeIntoDraft(ctx, targetID, extraction, item)
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+			return routing, true, ctxErr
+		}
+		switch {
+		case err == nil:
+			p.logger.Info("merged into thin draft", "source_id", item.SourceID, "draft_id", targetID)
+		case errors.Is(err, errMergeReviewRequired):
+			return routing, true, nil
+		case errors.Is(err, errMergeRelevanceUnavailable):
+			return routing, true, fmt.Errorf("merge assessment unavailable; retaining source for retry: %w", err)
+		case errors.Is(err, errMergeNotRelevant) && !item.CorroborationOnly:
+			p.logger.Info("merge into thin draft refused; processing as new item", "source_id", item.SourceID, "draft_id", targetID, "error", err)
+			routing.Decision = DedupNew
+		default:
+			p.logMergeFailure("merge into thin draft failed", err, "source_id", item.SourceID, "draft_id", targetID)
+		}
+		if routing.Decision != DedupNew {
+			if err := p.markSeen(item); err != nil {
+				return routing, true, fmt.Errorf("recording seen item: %w", err)
+			}
+			return routing, true, nil
+		}
+	}
+	if routing.Decision == DedupUpdate {
+		p.logger.Info("processing CVE update", "source_id", item.SourceID, "cves", cves)
+	}
+	return routing, false, nil
 }
 
 // Continue only after quality and extraction have succeeded. Claim checkpoints

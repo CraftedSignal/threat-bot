@@ -74,6 +74,8 @@ func TestMaterialOmissionStructuredEvidenceKeepsProductAndCVEScope(t *testing.T)
 		{"complete scoped fact", "CVE-2099-4001", "Example Harbor", text, true},
 		{"different CVE", "CVE-2099-4002", "Example Harbor", text, false},
 		{"different product", "CVE-2099-4001", "Example Bridge", text, false},
+		{"complete structured record", "CVE-2099-4001", "Example Harbor", `{"cve_id":"CVE-2099-4001","product":"Example Harbor","kind":"solution","text":"Update Example Harbor to at least 2.4."}`, true},
+		{"neighbor structured record", "CVE-2099-4001", "Example Bridge", `{"cve_id":"CVE-2099-4001","product":"Example Bridge","kind":"solution","text":"Update Example Harbor to at least 2.4."}`, false},
 		{"detached version", "CVE-2099-4001", "Example Harbor", "2.4", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

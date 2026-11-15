@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -169,7 +170,7 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 			defer wg.Done()
 			failState := func(operation string, err error) {
 				failure := fmt.Errorf("%s: %s: %w", s.Name(), operation, err)
-				r.recordError(s.Name(), false)
+				r.recordError(s.Name(), failure)
 				mu.Lock()
 				errs = append(errs, failure)
 				durableErrs = append(durableErrs, failure)
@@ -203,19 +204,22 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 					r.logger.Debug("poll skipped; source is backing off", "source", s.Name())
 					return
 				}
-				expectedUpstream := isExpectedUpstreamScraperError(err)
 				// Don't advance lastPoll on failure — retry next cycle
 				// but use a short backoff (half the poll interval) to avoid
 				// hammering a failing source every loop iteration.
 				entry.lastPoll = time.Now().Add(-entry.pollInterval / 2)
-				r.recordError(s.Name(), expectedUpstream)
-				mu.Lock()
-				errs = append(errs, scraperPollError{
-					source:           s.Name(),
-					err:              err,
-					expectedUpstream: expectedUpstream,
-				})
-				mu.Unlock()
+				health, logFailure := r.recordError(s.Name(), err)
+				if logFailure {
+					mu.Lock()
+					errs = append(errs, scraperPollError{
+						source:            s.Name(),
+						err:               err,
+						expectedUpstream:  health.LastErrorExpectedUpstream,
+						errorClass:        health.LastErrorClass,
+						consecutiveErrors: health.ConsecutiveErrors,
+					})
+					mu.Unlock()
+				}
 				return
 			}
 
@@ -310,20 +314,27 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 
 	for _, err := range errs {
 		safeErr := boundedScraperError(err)
+		args := []any{"error", safeErr}
+		var pollErr scraperPollError
+		if errors.As(err, &pollErr) {
+			args = append(args, "source", pollErr.source, "error_class", pollErr.errorClass, "consecutive_errors", pollErr.consecutiveErrors)
+		}
 		if isExpectedUpstreamScraperError(err) {
-			r.logger.Warn("scraper upstream unavailable", "error", safeErr)
+			r.logger.Warn("scraper upstream unavailable", args...)
 			continue
 		}
-		r.logger.Error("scraper error", "error", safeErr)
+		r.logger.Error("scraper error", args...)
 	}
 
 	return allItems, errors.Join(durableErrs...)
 }
 
 type scraperPollError struct {
-	source           string
-	err              error
-	expectedUpstream bool
+	source            string
+	err               error
+	expectedUpstream  bool
+	errorClass        string
+	consecutiveErrors int
 }
 
 func (e scraperPollError) Error() string {
@@ -345,6 +356,11 @@ func isExpectedUpstreamScraperError(err error) bool {
 	if code, ok := upstreamStatus(err); ok {
 		return expectedUpstreamStatuses[code]
 	}
+	if scraperErrorClass(err) == "tls_certificate" {
+		// Verification still fails closed. A source certificate failure is
+		// an upstream availability problem; sustained errors remain unhealthy.
+		return true
+	}
 	// Dropped connections and timeouts are upstream hiccups, not bot faults.
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -358,11 +374,37 @@ func isExpectedUpstreamScraperError(err error) bool {
 		strings.Contains(msg, "Failed to detect feed type")
 }
 
+func scraperErrorClass(err error) string {
+	var invalid x509.CertificateInvalidError
+	var unknown x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	if errors.As(err, &invalid) || errors.As(err, &unknown) || errors.As(err, &hostname) {
+		return "tls_certificate"
+	}
+	if code, ok := upstreamStatus(err); ok {
+		return fmt.Sprintf("http_%d", code)
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "network_eof"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "network_timeout"
+	}
+	if err != nil && strings.Contains(err.Error(), "parsing feed ") && strings.Contains(err.Error(), "Failed to detect feed type") {
+		return "feed_format"
+	}
+	return "unexpected"
+}
+
 // Never log arbitrary upstream response text or credential-bearing request
 // URLs. Operation/source context is logged separately from these finite states.
 func boundedScraperError(err error) string {
 	if err == nil {
 		return ""
+	}
+	if scraperErrorClass(err) == "tls_certificate" {
+		return "upstream TLS certificate verification failed"
 	}
 	if code, ok := upstreamStatus(err); ok {
 		return fmt.Sprintf("upstream HTTP %d (details redacted)", code)

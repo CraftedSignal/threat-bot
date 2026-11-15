@@ -383,59 +383,7 @@ func runScraper() {
 			}
 		}
 
-		// Emit a log line only when a source flips between healthy and
-		// unhealthy. The previous behaviour logged every unhealthy source
-		// every minute, producing tens of thousands of WARN lines per day.
-		for _, h := range runner.HealthSummary() {
-			healthy := h.IsHealthy()
-			was, seen := prevHealthy[h.Source]
-			prevHealthy[h.Source] = healthy
-
-			if !seen {
-				if !healthy {
-					args := []any{
-						"source", h.Source,
-						"consecutive_errors", h.ConsecutiveErrors,
-						"last_success", h.LastSuccess,
-						"last_error", h.LastError,
-						"last_error_expected_upstream", h.LastErrorExpectedUpstream,
-						"total_items", h.TotalItems,
-					}
-					if h.LastErrorExpectedUpstream {
-						logger.Warn("source unhealthy", args...)
-					} else {
-						logger.Error("source unhealthy", args...)
-					}
-				}
-				continue
-			}
-
-			if was == healthy {
-				continue
-			}
-
-			if !healthy {
-				args := []any{
-					"source", h.Source,
-					"consecutive_errors", h.ConsecutiveErrors,
-					"last_success", h.LastSuccess,
-					"last_error", h.LastError,
-					"last_error_expected_upstream", h.LastErrorExpectedUpstream,
-					"total_items", h.TotalItems,
-				}
-				if h.LastErrorExpectedUpstream {
-					logger.Warn("source unhealthy", args...)
-				} else {
-					logger.Error("source unhealthy", args...)
-				}
-			} else {
-				logger.Info("source recovered",
-					"source", h.Source,
-					"last_success", h.LastSuccess,
-					"total_items", h.TotalItems,
-				)
-			}
-		}
+		logSourceHealthTransitions(logger, runner.HealthSummary(), prevHealthy)
 
 		select {
 		case <-ctx.Done():

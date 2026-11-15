@@ -42,8 +42,8 @@ func configuredRetryBackoff(d time.Duration) time.Duration {
 	return d
 }
 func (p *Pipeline) processingKey(item scraper.RawItem) string {
-	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema, groundingReportSchema, claimGroundingReportSchema})
-	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
+	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema, groundingReportSchema, claimGroundingReportSchema, llm.MustSchemaOf[materialOmissionEvidenceReport]()})
+	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + materialOmissionEvidenceSystem + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(string(schemas)+prompts+processingPolicyVersion+"\x00"+llm.CachePolicyVersion+"\x00"+p.processingPolicy+"\x00"+item.EvidenceRevision())))
 }
 func (p *Pipeline) processingPolicyKey() string { return p.processingKey(scraper.RawItem{}) }

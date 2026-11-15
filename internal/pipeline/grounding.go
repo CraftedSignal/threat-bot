@@ -146,6 +146,7 @@ func normalizeForQuote(s string) string {
 // Malformed or cross-target findings defer through the normal bounded retry
 // path rather than being trusted as repair instructions or silently accepted.
 func validateMaterialOmission(issue groundingIssue, source, brief string) error {
+	source = materialOmissionSource(source)
 	quote, subject := normalizeForQuote(issue.SourceQuote), normalizeForQuote(issue.Subject)
 	if quote == "" || subject == "" || len(issue.SourceQuote) > 4000 {
 		return fmt.Errorf("material omission requires a verbatim source quote with its target subject")
@@ -175,7 +176,7 @@ func validateMaterialOmission(issue groundingIssue, source, brief string) error 
 	mentionsSubject := strings.Contains(quote, subject) || productNameLocation(issue.SourceQuote, issue.Subject) != nil
 	// A complete structured record carries a CVE even when its product is a
 	// neighbor. Its metadata must not bypass the explicit product binding.
-	if !scoped && (structuredQuote || !strings.Contains(normalizeForQuote(source), quote) || !mentionsSubject) {
+	if !scoped && (structuredQuote || !materialQuoteInProse(issue.SourceQuote, source) || !mentionsSubject) {
 		return fmt.Errorf("material omission requires a verbatim source quote with its target subject")
 	}
 	for _, id := range sourceCVEPattern.FindAllString(issue.SourceQuote, -1) {
@@ -184,6 +185,57 @@ func validateMaterialOmission(issue groundingIssue, source, brief string) error 
 		}
 	}
 	return nil
+}
+
+// The generated primary supplement mixes retained CNA facts with provenance
+// and coverage bookkeeping. Only its structured facts can establish a material
+// source omission; a registry URL or an unknown-coverage notice cannot supply a
+// missing fixed release. Keep the original article intact, including genuine
+// vendor statements about unknown or unavailable remediation.
+func materialOmissionSource(source string) string {
+	if !strings.Contains(source, "Verified primary CVE evidence.") {
+		return source
+	}
+	var lines []string
+	primary := false
+	for _, line := range strings.Split(source, "\n") {
+		if strings.HasPrefix(line, "Verified primary CVE evidence.") {
+			primary = true
+			continue
+		}
+		if primary && line == "Original source:" {
+			primary = false
+		}
+		if primary {
+			var fact cnaSourceFact
+			if json.Unmarshal([]byte(line), &fact) != nil || fact.CVEID == "" {
+				continue
+			}
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Structured record bodies cannot serve as ordinary prose: that would bypass
+// their CVE/product binding or accept a partial decoded field. Keep records as
+// attribution boundaries so excluding them cannot splice disconnected prose.
+func materialQuoteInProse(quote, source string) bool {
+	quote = normalizeForQuote(quote)
+	var prose strings.Builder
+	for _, line := range strings.Split(source, "\n") {
+		var fact cnaSourceFact
+		if json.Unmarshal([]byte(line), &fact) == nil && fact.CVEID != "" {
+			if strings.Contains(normalizeForQuote(prose.String()), quote) {
+				return true
+			}
+			prose.Reset()
+			continue
+		}
+		prose.WriteString(line)
+		prose.WriteByte('\n')
+	}
+	return strings.Contains(normalizeForQuote(prose.String()), quote)
 }
 
 func materialQuoteInScopedFact(issue groundingIssue, source string, doc map[string]any) bool {

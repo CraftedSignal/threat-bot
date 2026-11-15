@@ -150,7 +150,7 @@ func TestGroundingEvidenceCorrectionRetainsStructuredPrimaryScope(t *testing.T) 
 		answer: string(answer),
 	}
 	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", string(fact), syntheticIncompleteBrief)
-	if err != nil || result.Grounded || len(result.Issues) != 1 || !strings.Contains(result.Issues[0], text) {
+	if err != nil || result.Grounded || len(result.Issues) != 1 || !strings.Contains(result.Issues[0], string(fact)) {
 		t.Fatalf("complete decoded CNA field must keep its explicit record scope: %+v %v", result, err)
 	}
 }

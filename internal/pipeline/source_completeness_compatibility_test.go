@@ -31,6 +31,10 @@ func TestSourceCompletenessCheckpointPolicyTransition(t *testing.T) {
 			policyFingerprint:   "8ef1f0304181ce24e9a164d67b65280e778676337e8bac7a863b537a486b123e",
 			evidenceFingerprint: "3343e0a1fde52c79fcca1ed76c58b715ddb2803b341d6cab05bcec1cf813ec91",
 			inputFingerprint:    "74395bbb1ba8bbb4369ad8622028fb2ee0634cf8abdbd7ae9475a8f997ec41cd"},
+		{name: "deployed dad606 requires evidence integrity validation", deployed: true,
+			policyFingerprint:   "5128ac3793f7d3655bb6db22fa35d89695cfebddd06cb295ec176e69f580b4e8",
+			evidenceFingerprint: "0d137dbbe55acb37fd242dbb402775226c715851646457b8937db9e6bbe0ac45",
+			inputFingerprint:    "b67882a425c3c63f0eac5830d75eb3df60ffdc3011be55019bfa6684bf44f39c"},
 		{name: "current policy resumes editorial hold"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

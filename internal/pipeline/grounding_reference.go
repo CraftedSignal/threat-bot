@@ -27,6 +27,7 @@ const maxOmissionReferenceBytes = 6000
 var evidenceSentenceEnd = regexp.MustCompile(`[.!?](?:[ \t]+|$)`)
 
 func scopedOmissionEvidence(source, brief string) []scopedGroundingEvidence {
+	source = materialOmissionSource(source)
 	subjects := materialOmissionSubjects(brief)
 	refs := []scopedGroundingEvidence{}
 	seen := map[string]bool{}
@@ -58,7 +59,10 @@ func scopedOmissionEvidence(source, brief string) []scopedGroundingEvidence {
 	for _, line := range strings.Split(source, "\n") {
 		var fact cnaSourceFact
 		if json.Unmarshal([]byte(line), &fact) == nil && fact.CVEID != "" {
-			add(fact.Text)
+			// The decoded text alone can be identical across CVEs and may not
+			// repeat its record identity. Keep the full scoped field through
+			// reference deduplication and the downstream repair instruction.
+			add(line)
 			continue
 		}
 		start := 0
@@ -97,7 +101,42 @@ func resolveMaterialOmission(issue groundingIssue, source, brief string, refs []
 			return issue, fmt.Errorf("material omission has an unknown source evidence reference")
 		}
 	}
-	return issue, validateMaterialOmission(issue, source, brief)
+	if err := validateMaterialOmission(issue, source, brief); err != nil {
+		return issue, err
+	}
+	eligibleSource := materialOmissionSource(source)
+	var fullRecord cnaSourceFact
+	if issue.SourceEvidenceID != "" || json.Unmarshal([]byte(issue.SourceQuote), &fullRecord) == nil && fullRecord.CVEID != "" || materialQuoteInProse(issue.SourceQuote, eligibleSource) {
+		return issue, nil
+	}
+	// Decoded text fields are accepted for provider fidelity, but they cannot
+	// discard the identity that made them eligible. Bind an unambiguous field
+	// back to its complete source record before forming a repair instruction.
+	quote := normalizeForQuote(issue.SourceQuote)
+	var scopedQuote string
+	seen := map[cnaSourceFact]bool{}
+	doc := parseBriefFrontmatter(brief)
+	for _, line := range strings.Split(eligibleSource, "\n") {
+		var fact cnaSourceFact
+		if json.Unmarshal([]byte(line), &fact) != nil || fact.CVEID == "" || normalizeForQuote(fact.Text) != quote || seen[fact] {
+			continue
+		}
+		candidate := issue
+		candidate.SourceQuote = line
+		if !materialQuoteInScopedFact(candidate, eligibleSource, doc) {
+			continue
+		}
+		seen[fact] = true
+		if scopedQuote != "" {
+			return issue, fmt.Errorf("material omission decoded quote matches multiple scoped primary records; select a scoped source evidence reference")
+		}
+		scopedQuote = line
+	}
+	if scopedQuote != "" {
+		issue.SourceQuote = scopedQuote
+		return issue, validateMaterialOmission(issue, source, brief)
+	}
+	return issue, nil
 }
 
 // This is a deterministic output-contract failure, not a provider outage or

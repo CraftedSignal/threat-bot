@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/craftedsignal/threat-bot/internal/llm"
+	"gopkg.in/yaml.v3"
 )
 
 // The types below are the shape the model is asked to write a brief in. They
@@ -299,6 +300,21 @@ func (b generatedBrief) checkContract() error {
 	}
 	if _, ok := canonicalSeverity(b.Severity); !ok {
 		return &InvalidFieldError{Field: "severity", Value: b.Severity}
+	}
+	return nil
+}
+
+// ValidateLLMResponse keeps unusable but decodable assemblies out of the
+// durable LLM cache. The assembler repeats the same contract check for clients
+// that do not use that cache, preserving its quarantine error and raw candidate.
+func (b generatedBrief) ValidateLLMResponse() error {
+	if err := b.checkContract(); err != nil {
+		doc, documentErr := b.document()
+		if documentErr != nil {
+			return documentErr
+		}
+		raw, _ := yaml.Marshal(doc)
+		return &InvalidBriefYAMLError{Err: err, Raw: string(raw)}
 	}
 	return nil
 }

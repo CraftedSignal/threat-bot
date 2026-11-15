@@ -56,6 +56,29 @@ func TestOfflineConfigValidationAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestOfflineConfigValidationAcceptsPublisherCacheWithoutCreatingFiles(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "must-not-exist.db")
+	cachePath := filepath.Join(dir, "publisher-cache")
+	path := filepath.Join(dir, "config.yaml")
+	body := fmt.Sprintf("db: {path: %q}\nllm: {provider: ollama, model: test}\npublish: {cache_dir: %q}\n", dbPath, cachePath)
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := flagConfig
+	flagConfig = path
+	defer func() { flagConfig = old }()
+	var out bytes.Buffer
+	if err := runConfigValidation([]string{"--command", "run"}, &out); err != nil {
+		t.Fatalf("deployed publisher cache configuration rejected: %v", err)
+	}
+	for _, created := range []string{dbPath, cachePath} {
+		if _, err := os.Stat(created); !os.IsNotExist(err) {
+			t.Fatalf("offline validation created %s: %v", created, err)
+		}
+	}
+}
+
 func TestLocalApprovalDoesNotInitializePublishingCredentials(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

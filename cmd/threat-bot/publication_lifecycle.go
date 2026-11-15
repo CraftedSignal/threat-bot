@@ -18,6 +18,7 @@ import (
 func newServicePublisher(cfg *config.Config, ghTokenFn func() string, logger *slog.Logger, llmClient llm.Client, db *storage.DB) *publisher.Publisher {
 	pub := publisher.New(cfg.Publish.RepoSlug, cfg.Publish.FeedPublicKey, ghTokenFn, logger, publicationSettings(cfg),
 		publisher.WithLLMClient(llmClient), publisher.WithOutbox(db),
+		publisher.WithBlobCache(cfg.Publish.CacheDir),
 		publisher.WithDraftPublishable(func(draft publisher.DraftPublication) (bool, error) {
 			return draftMayPublish(db, draft)
 		}),

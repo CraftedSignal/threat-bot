@@ -58,6 +58,9 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		if state.Item.SourceID != item.SourceID {
 			return fmt.Errorf("checkpoint source identity mismatch")
 		}
+		if state.Stage != "" || state.ClaimAssessment != nil {
+			return p.resumeDiscoveryClaim(ctx, key, item, attemptID, *cp, state)
+		}
 		if state.PolicyKey == p.processingPolicyKey() {
 			if state.MergeDraftID == "" && cp.InputKey == key && time.Now().Before(cp.RetryAt) {
 				return nil
@@ -286,20 +289,6 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	}
 	p.decisions.record(outcomePassedQuality)
 
-	// Look up related sigma rules for context.
-	var sigmaRules []sigma.Rule
-	if item.SigmaRule != nil {
-		sigmaRules = append(sigmaRules, sigma.Rule{
-			ID:        item.SigmaRule.ID,
-			Title:     item.SigmaRule.Title,
-			Tags:      item.SigmaRule.Tags,
-			Level:     item.SigmaRule.Level,
-			LogSource: sigma.LogSource(item.SigmaRule.LogSource),
-			Detection: item.SigmaRule.Detection,
-			RawYAML:   item.Content,
-		})
-	}
-
 	// Extract IOCs, TTPs, and other threat data from narrative sources.
 	var extraction *ExtractionResult
 	if mergeExtraction != nil {
@@ -318,13 +307,33 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Warn("extraction failed, continuing without", "source_id", item.SourceID, "error", extractErr)
 		}
 	}
+	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, RebuildDraftID: rebuildDraftID}
+	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
+}
+
+// Continue only after quality and extraction have succeeded. Claim checkpoints
+// resume here; their empty BriefYAML must never enter processCandidate.
+func (p *Pipeline) finishExtractedItem(ctx context.Context, key string, state processingCandidate, dedupDecision DedupDecision, dedupEntries []storage.ContentIndexEntry) error {
+	item, extraction := state.Item, state.Extraction
+	preCVEs, rebuildDraftID := state.PreCVEs, state.RebuildDraftID
+	// Look up related sigma rules for context.
+	var sigmaRules []sigma.Rule
+	if item.SigmaRule != nil {
+		sigmaRules = append(sigmaRules, sigma.Rule{
+			ID:        item.SigmaRule.ID,
+			Title:     item.SigmaRule.Title,
+			Tags:      item.SigmaRule.Tags,
+			Level:     item.SigmaRule.Level,
+			LogSource: sigma.LogSource(item.SigmaRule.LogSource),
+			Detection: item.SigmaRule.Detection,
+			RawYAML:   item.Content,
+		})
+	}
+
 	if item.Discovery != nil && extraction != nil {
-		delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "claim_evidence_grounding"}), item, extraction)
-		if err != nil {
-			return fmt.Errorf("claim evidence grounding: %w", err)
-		}
-		if !delta.Grounded {
-			return fmt.Errorf("claim evidence unsupported: %s", strings.Join(delta.Issues, "; "))
+		proceed, err := p.assessDiscoveryClaim(ctx, key, &state)
+		if err != nil || !proceed {
+			return err
 		}
 	}
 	if item.Discovery != nil {
@@ -448,6 +457,8 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		}
 		return fmt.Errorf("brief assembly: %w", err)
 	}
-	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, BriefYAML: briefYAML, RebuildDraftID: rebuildDraftID}
+	state.Item, state.Extraction = item, extraction
+	state.BriefYAML, state.RebuildDraftID = briefYAML, rebuildDraftID
+	state.Stage, state.ClaimAssessment = "", nil
 	return p.processCandidate(ctx, key, state)
 }

@@ -11,7 +11,7 @@ import (
 )
 
 type materialOmissionEvidence struct {
-	Subject     string `json:"subject" desc:"Copy exactly one eligible completeness subject. Use empty string if the original omission cannot be supported."`
+	Subject     string `json:"subject" desc:"Copy exactly one eligible completeness subject, including when the original omission cannot be supported."`
 	SourceQuote string `json:"source_quote" desc:"Verbatim source passage with that subject and the omitted fact, or the complete decoded text of a matching CVE/product-scoped primary evidence field. Empty if unsupported."`
 }
 
@@ -23,7 +23,7 @@ const materialOmissionEvidenceSystem = `Correct the evidence metadata of a threa
 
 For each rejected material omission, preserve its meaning and return only a corrected subject and source_quote in the same order. Copy a subject exactly from the eligible list. Quote a verbatim source passage containing that subject and the omitted fact. For a structured primary evidence fact, you may copy its complete decoded text field when its CVE and product match the brief; do not splice fields, quote a detached fragment, or borrow a neighboring product's fix. A record-wide field without product scope must name the brief's product in its text.
 
-Do not invent evidence, change the omitted fact, drop findings, or convert them to minor omissions. If the source cannot support an omission with the correct target scope, return empty subject/source_quote for that entry so the candidate stays held.`
+Do not invent evidence, change the omitted fact, drop findings, or convert them to minor omissions. If the source cannot support an omission with the correct target scope, still select an eligible subject and return an empty source_quote for that entry so the candidate stays held.`
 
 func materialOmissionSubjects(brief string) []string {
 	doc := parseBriefFrontmatter(brief)
@@ -84,9 +84,10 @@ func (g *GroundingChecker) repairMaterialOmissionEvidence(ctx context.Context, s
 ## Rejected material omissions (preserve order and meaning)
 %s`, source, brief, subjectJSON, rejectedJSON)
 	// Build a per-call schema so concurrent candidates cannot change each
-	// other's target enum. Empty subjects remain invalid under Go validation.
+	// other's target enum. Vertex rejects empty enum members; unsupported
+	// omissions instead leave source_quote empty and fail Go validation.
 	schema := llm.MustSchemaOf[materialOmissionEvidenceReport]()
-	schema.Properties["evidence"].Items.Properties["subject"].Enum = append(subjects, "")
+	schema.Properties["evidence"].Items.Properties["subject"].Enum = subjects
 	var corrected materialOmissionEvidenceReport
 	g.logger.Info("correcting grounding omission evidence", "findings", len(rejected))
 	ctx = llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_evidence_repair"})

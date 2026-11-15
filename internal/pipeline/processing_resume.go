@@ -18,6 +18,7 @@ import (
 const processingPolicyVersion = "evidence-quality-2026-11-15-v4"
 
 type processingCandidate struct {
+	Stage             string
 	PolicyKey         string
 	EvidenceKey       string
 	AttemptID         string
@@ -33,6 +34,7 @@ type processingCandidate struct {
 	MergeTargetKey    string
 	MergeAttempts     int
 	GroundingFailure  *processingGroundingFailure
+	ClaimAssessment   *processingClaimAssessment
 }
 
 func configuredRetryBackoff(d time.Duration) time.Duration {

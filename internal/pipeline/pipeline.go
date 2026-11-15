@@ -343,34 +343,23 @@ func New(cfg Config) *Pipeline {
 const flushBatchSize = 25
 
 func (p *Pipeline) Process(ctx context.Context, items []scraper.RawItem) error {
+	intents, _ := p.db.ListPublicationIntents()
 	recoveryErr := p.recoverPublicationIntents()
 	if recoveryErr != nil {
 		p.logger.Error("publication recovery deferred", "error", recoveryErr)
 	}
+	// Publisher enqueue can already have acknowledged the DB intent while
+	// its own durable outbox still awaits a successful flush.
+	if (p.hasPrefetcher() || len(intents) > 0) && p.autoPublish && p.publisher != nil {
+		if err := p.publisher.Flush(); err != nil {
+			p.logger.Error("recovered bundle flush failed", "error", err)
+		}
+	}
 	published := 0
 	for start := 0; start < len(items); start += prefetchChunkSize {
 		chunk := append([]scraper.RawItem(nil), items[start:min(start+prefetchChunkSize, len(items))]...)
-		p.prefetchItems(ctx, chunk)
-		for _, item := range chunk {
-			if err := ctx.Err(); err != nil {
-				return p.finishShutdown(err)
-			}
-			if err := p.processItem(ctx, item); err != nil {
-				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
-					return p.finishShutdown(ctxErr)
-				}
-				p.decisions.record(outcomeFailed)
-				p.logger.Error("pipeline error", "source_id", item.SourceID, "error", err)
-			}
-			// Flush periodically to avoid losing a large batch on eviction.
-			if p.autoPublish && p.publisher != nil {
-				published++
-				if published%flushBatchSize == 0 {
-					if err := p.publisher.Flush(); err != nil {
-						p.logger.Error("bundle flush failed", "error", err)
-					}
-				}
-			}
+		if err := p.processBatchChunk(ctx, chunk, &published); err != nil {
+			return p.finishShutdown(err)
 		}
 		p.releasePrefetch()
 	}
@@ -398,6 +387,77 @@ func (p *Pipeline) Process(ctx context.Context, items []scraper.RawItem) error {
 	}
 
 	return recoveryErr
+}
+
+// processBatchChunk owns one optional provider worker. Only this parent
+// processes, deduplicates, assembles and publishes. Joining precedes every
+// return, including shutdown, so answers cannot be released under the worker.
+func (p *Pipeline) processBatchChunk(ctx context.Context, chunk []scraper.RawItem, published *int) error {
+	chunkCtx := context.WithValue(ctx, sourceRefreshMemoKey{}, sourceRefreshMemo{})
+	var ready []scraper.RawItem
+	if p.hasPrefetcher() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := p.retainBatchItems(chunk); err != nil {
+			if !errors.Is(err, storage.ErrIngestionBackpressure) {
+				return fmt.Errorf("retaining batch source payloads: %w", err)
+			}
+			retained, readErr := p.retainedBatchItems(chunk)
+			if readErr != nil {
+				return fmt.Errorf("reading retained batch source payloads: %w", readErr)
+			}
+			p.logger.Warn("intake full; draining retained sources before new inference", "deferred", len(chunk)-len(retained), "retained", len(retained))
+			chunk = retained
+		}
+		ready, chunk = p.readyBatchItems(chunkCtx, chunk)
+	}
+	plan := p.planPrefetch(chunkCtx, chunk)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	if len(plan.qualityRequests) > 0 || len(plan.extractionRequests) > 0 || len(plan.candidates) > 0 {
+		go func() { defer close(done); plan.run(workerCtx) }()
+	} else {
+		close(done)
+	}
+	defer func() { cancel(); <-done }()
+	for phase, work := range [][]scraper.RawItem{ready, chunk} {
+		if phase == 1 {
+			<-done
+			// Pending social evidence refreshes at consumption after provider
+			// waiting. Article bodies already remain enriched in chunk.
+			clear(chunkCtx.Value(sourceRefreshMemoKey{}).(sourceRefreshMemo))
+		}
+		for _, item := range work {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := p.processItem(chunkCtx, item); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+					return ctxErr
+				}
+				p.decisions.record(outcomeFailed)
+				p.logger.Error("pipeline error", "source_id", item.SourceID, "error", err)
+			}
+			if p.autoPublish && p.publisher != nil {
+				*published++
+				if *published%flushBatchSize == 0 {
+					if err := p.publisher.Flush(); err != nil {
+						p.logger.Error("bundle flush failed", "error", err)
+					}
+				}
+			}
+		}
+		if phase == 0 && len(ready) > 0 && len(chunk) > 0 && p.autoPublish && p.publisher != nil {
+			if err := p.publisher.Flush(); err != nil {
+				p.logger.Error("ready bundle flush failed", "error", err)
+			}
+		}
+	}
+	return ctx.Err()
 }
 
 // finishShutdown releases batch state and publishes work completed before the
@@ -516,6 +576,38 @@ func isActionableBrief(briefYAML string) bool {
 }
 
 func (p *Pipeline) refreshSourceEvidence(ctx context.Context, item scraper.RawItem) (scraper.RawItem, error) {
+	if err := ctx.Err(); err != nil {
+		return item, err
+	}
+	key := item.SourceID + "\x00" + item.ContentRevision()
+	memo, _ := ctx.Value(sourceRefreshMemoKey{}).(sourceRefreshMemo)
+	if result, ok := memo[key]; ok {
+		return result.item, result.err
+	}
+	refreshed, articleBase, err := p.refreshSourceEvidenceUncached(ctx, item)
+	if memo != nil {
+		memo[key] = sourceRefreshResult{item: refreshed, articleBase: articleBase, err: err}
+	}
+	return refreshed, err
+}
+
+func (p *Pipeline) refreshSourceEvidenceUncached(ctx context.Context, item scraper.RawItem) (scraper.RawItem, scraper.RawItem, error) {
+	articleBase := item
+	// Social enrichment mutates provenance as well as text. Preserve the
+	// fetched source payload for a new current-context reconstruction.
+	if item.Metadata != nil {
+		metadata := make(map[string]string, len(item.Metadata))
+		for key, value := range item.Metadata {
+			metadata[key] = value
+		}
+		item.Metadata = metadata
+	}
+	if item.Discovery != nil {
+		discovery := *item.Discovery
+		discovery.ParentURLs = append([]string(nil), discovery.ParentURLs...)
+		discovery.QuoteURLs = append([]string(nil), discovery.QuoteURLs...)
+		item.Discovery = &discovery
+	}
 	var refreshErrors []error
 	if p.socialProvider != nil && (item.Discovery != nil || containsXStatusReference(item.URL+" "+item.Content)) {
 		item = scraper.EnrichSocialContext(ctx, p.socialProvider, item, p.socialThreadDepth)
@@ -540,6 +632,7 @@ func (p *Pipeline) refreshSourceEvidence(ctx context.Context, item scraper.RawIt
 	}
 
 	// Enrich thin content before quality gate so scoring sees full article.
+	beforeArticle := item.Content
 	origLen := len(item.Content)
 	for _, enrichmentErr := range p.enricher.Enrich(ctx, &item) {
 		refreshErrors = append(refreshErrors, enrichmentErr)
@@ -549,5 +642,8 @@ func (p *Pipeline) refreshSourceEvidence(ctx context.Context, item scraper.RawIt
 		p.logger.Debug("content enriched", "source_id", item.SourceID, "before", origLen, "after", len(item.Content))
 	}
 
-	return item, errors.Join(refreshErrors...)
+	articleBase.Content += strings.TrimPrefix(item.Content, beforeArticle)
+	articleBase.Enriched = item.Enriched
+	articleBase.NeedsFullArticle = item.NeedsFullArticle
+	return item, articleBase, errors.Join(refreshErrors...)
 }

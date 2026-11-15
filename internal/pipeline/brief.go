@@ -27,6 +27,7 @@ OUTPUT FORMAT: Return one JSON object that follows the response schema attached 
 LANGUAGE: Write all user-facing fields in English. If source material is not English, translate it. Do not copy non-English source titles into title.
 ENCODING: Write values as ordinary JSON strings, escaping backslashes as JSON requires. Text that contains colons, quotes, brackets or leading symbols needs no special treatment.
 VULNERABILITY SOURCE HANDLING: When an NVD/CVE item links a vendor or CERT advisory, use that primary advisory for product applicability, affected and fixed versions, prerequisites (including authentication or privilege), and remediation. Preserve the vendor's exact version/build strings and distinguish affected from fixed releases. Use NVD for CVSS and its published CPE/range data. Prioritize actions using only supplied severity, exposure, prerequisites, and exploitation evidence; do not imply active exploitation or a detection method without evidence. If the primary advisory is unavailable or leaves a fact unspecified, state the gap and source limitation instead of guessing. Cite the advisory in references. Keep the brief proportionate to the evidence; never add filler to meet a length target.
+VERIFIED PRIMARY EVIDENCE: When supplied, incorporate material affected/fixed versions, remediation and prerequisites from the verified primary evidence block. Keep every fact bound to its stated CVE and product; neighboring products and background CVEs do not become affected targets. Preserve conflicts and incomplete coverage as explicit uncertainty. This supplement does not corroborate a social claim or prove observed exploitation. Independent factual and completeness checks still follow generation.
 
 FIELD GUIDE (what each schema field holds; the YAML notation is for reading only, and Sigma detections and test data take the structured form described under SIGMA STRUCTURE):
 
@@ -632,7 +633,14 @@ func NewBriefAssembler(client llm.Client) *BriefAssembler {
 }
 
 func (a *BriefAssembler) Assemble(ctx context.Context, item scraper.RawItem, extraction *ExtractionResult, sigmaRules []sigma.Rule) (string, error) {
+	return a.assemble(ctx, item, extraction, sigmaRules, "")
+}
+
+func (a *BriefAssembler) assemble(ctx context.Context, item scraper.RawItem, extraction *ExtractionResult, sigmaRules []sigma.Rule, primaryEvidence string) (string, error) {
 	content := smartTruncate(item.Content, 12000)
+	if primaryEvidence != "" {
+		content = primaryEvidence + "\nOriginal source:\n" + content
+	}
 	sourceTitle := cleanBriefSourceTitle(item.Title)
 	if sourceTitle == "" {
 		sourceTitle = item.Title

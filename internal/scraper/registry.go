@@ -276,6 +276,16 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 				freshness := itemFreshness(item)
 				item.Revision = item.ContentRevision()
 				if !freshness.IsZero() && freshness.Before(cutoff) {
+					// Paid work may outlive the feed lookback. Its durable queue
+					// payload must survive until actual processing completes.
+					retained, err := r.db.HasIngestionCandidate(item.SourceID, item.Revision)
+					if err != nil {
+						failState("checking retained ingestion before age filter", err)
+						return
+					}
+					if retained {
+						continue
+					}
 					r.logger.Debug("skipping old item", "source_id", item.SourceID, "published_at", item.PublishedAt, "cutoff", cutoff)
 					if err := r.db.MarkSeenRevision(item.SourceID, item.Source, item.Title, item.Revision); err != nil {
 						failState("recording old item", err)

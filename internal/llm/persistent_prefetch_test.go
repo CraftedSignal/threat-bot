@@ -67,6 +67,32 @@ func TestPersistentPrefetchSurvivesReleaseAndRestart(t *testing.T) {
 	}
 }
 
+func TestPrefetchReadinessReadsDurableCacheWithoutInference(t *testing.T) {
+	store := &memoryCacheStore{values: map[string]string{}}
+	live := &jsonReplyClient{reply: `{"score":4}`}
+	r := Request{Prompt: "p", System: "s", JSON: true, Schema: MustSchemaOf[boundedScore]()}
+	if err := NewCachedClient(live, "m", store).GenerateJSON(context.Background(), r.Prompt, r.System, &boundedScore{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	c := newPrefetchClient(live, runner, 10, quietLogger()).WithCache("m", store)
+	var score boundedScore
+	if !c.Cached(r, &score) || score.Score != 4 {
+		t.Fatalf("durable readiness miss: %+v", score)
+	}
+	for key := range store.values {
+		store.values[key] = `{"score":99}`
+	}
+	c.Release()
+	unchanged := boundedScore{Score: 2}
+	if c.Cached(r, &unchanged) || unchanged.Score != 2 {
+		t.Fatalf("invalid durable answer accepted/mutated output: %+v", unchanged)
+	}
+	if live.calls != 1 || len(runner.got) != 0 {
+		t.Fatalf("readiness bought inference: live=%d batches=%d", live.calls, len(runner.got))
+	}
+}
+
 // A semantically corrupt entry must neither poison scoring nor partially mutate the output.
 func TestPersistentJSONRejectsInvalidSemanticAnswer(t *testing.T) {
 	store := &memoryCacheStore{values: map[string]string{}}
@@ -137,6 +163,33 @@ func TestLiveFallbackChecksDurablePendingJobEvenWithoutPrefetch(t *testing.T) {
 	var out boundedScore
 	if err := c.GenerateJSON(context.Background(), req.Prompt, "", &out); err == nil || live.calls != 0 {
 		t.Fatalf("durable pending request duplicated live: err=%v calls=%d", err, live.calls)
+	}
+}
+
+func TestReadinessMissPreservesPaidAndAmbiguousClaims(t *testing.T) {
+	for _, reference := range []string{fakeJobName, creationIntentPrefix + "20261115-unknown", batchReviewPrefix + "ambiguous", batchAbandonedPrefix + "manual"} {
+		t.Run(reference, func(t *testing.T) {
+			store := &combinedMemoryStore{memoryCacheStore: memoryCacheStore{values: map[string]string{}}, memoryJobs: memoryJobs{jobs: map[string]string{}}}
+			req := Request{Prompt: "pending", JSON: true, Schema: MustSchemaOf[boundedScore]()}
+			key := persistentRequestKey("m", req)
+			store.jobs[key] = reference
+			live, runner := &jsonReplyClient{}, &fakeRunner{}
+			c := newPrefetchClient(live, runner, 10, quietLogger()).WithCache("m", store)
+			if c.Cached(req, &boundedScore{}) {
+				t.Fatal("claim mistaken for completed response")
+			}
+			c.Release()
+			if store.jobs[key] != reference {
+				t.Fatalf("readiness changed claim: %q", store.jobs[key])
+			}
+			var pending *PendingBatchError
+			if err := c.GenerateJSON(context.Background(), req.Prompt, "", &boundedScore{}); !errors.As(err, &pending) {
+				t.Fatalf("claim lost duplicate guard: %v", err)
+			}
+			if live.calls != 0 || len(runner.got) != 0 {
+				t.Fatal("readiness/restart bought duplicate inference")
+			}
+		})
 	}
 }
 

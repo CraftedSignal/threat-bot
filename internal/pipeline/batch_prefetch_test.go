@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 )
 
 type pipelinePrefetchFake struct {
+	mu       sync.Mutex
 	cancel   context.CancelFunc
 	batches  [][]llm.Request
 	answers  map[llm.Request]string
@@ -25,6 +27,8 @@ type pipelinePrefetchFake struct {
 }
 
 func (f *pipelinePrefetchFake) Prefetch(ctx context.Context, reqs []llm.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if ctx.Err() != nil {
 		return
 	}
@@ -50,6 +54,8 @@ func (f *pipelinePrefetchFake) Prefetch(ctx context.Context, reqs []llm.Request)
 	}
 }
 func (f *pipelinePrefetchFake) Cached(r llm.Request, out any) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	text, ok := f.answers[r]
 	// Model lookup is by wire request; schema and attribution metadata are not prompt data.
 	if !ok {
@@ -62,8 +68,15 @@ func (f *pipelinePrefetchFake) Cached(r llm.Request, out any) bool {
 	}
 	return ok && json.Unmarshal([]byte(text), out) == nil
 }
-func (f *pipelinePrefetchFake) Release() { f.released++; clear(f.answers) }
+func (f *pipelinePrefetchFake) Release() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released++
+	clear(f.answers)
+}
 func (f *pipelinePrefetchFake) Generate(context.Context, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.live++
 	return "", fmt.Errorf("unexpected live call")
 }
@@ -71,6 +84,8 @@ func (f *pipelinePrefetchFake) GenerateJSON(_ context.Context, prompt, system st
 	if f.Cached(llm.Request{Prompt: prompt, System: system, JSON: true}, out) {
 		return nil
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.live++
 	return fmt.Errorf("unexpected live call")
 }
@@ -211,7 +226,7 @@ func TestPipelineBatchCancellationFlushesPublications(t *testing.T) {
 	if err := p.Process(ctx, []scraper.RawItem{batchItem("rejected")}); err != context.Canceled {
 		t.Fatalf("error=%v", err)
 	}
-	if pub.flushed != 1 || f.released != 1 {
+	if pub.flushed != 2 || f.released != 1 {
 		t.Fatalf("flushes=%d released=%d", pub.flushed, f.released)
 	}
 }

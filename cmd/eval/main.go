@@ -48,8 +48,7 @@ func main() {
 	}
 
 	predict := eval.ExtractorPredict(client)
-	base := eval.Run(ctx, docs, predict, eval.BaseTechniqueID)
-	exact := eval.Run(ctx, docs, predict, func(s string) string { return s })
+	base, exact := runEvaluation(ctx, docs, predict)
 
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "mkdir:", err)
@@ -62,6 +61,13 @@ func main() {
 	fmt.Printf("docs=%d  base macroF1=%.3f microF1=%.3f  exact macroF1=%.3f microF1=%.3f\n",
 		base.Docs, base.MacroF1, base.MicroF1, exact.MacroF1, exact.MicroF1)
 	fmt.Println("report ->", *out)
+}
+
+func runEvaluation(ctx context.Context, docs []eval.EvalDoc, predict eval.PredictFunc) (eval.Report, eval.Report) {
+	results := eval.CollectPredictions(ctx, docs, predict)
+	base := eval.Score(results, eval.BaseTechniqueID)
+	exact := eval.Score(results, func(s string) string { return s })
+	return base, exact
 }
 
 func writeJSON(path string, v any) error {

@@ -615,6 +615,11 @@ func (p *Publisher) fetchJSONFile(path string) ([]byte, string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&ghFile); err != nil {
 		return nil, "", fmt.Errorf("decoding GitHub response: %w", err)
 	}
+	if p.blobCache != nil {
+		if raw := p.blobCache.get(ghFile.SHA, ghFile.Size); raw != nil {
+			return raw, ghFile.SHA, nil
+		}
+	}
 
 	var raw []byte
 	if ghFile.Content != "" {
@@ -639,6 +644,11 @@ func (p *Publisher) fetchJSONFile(path string) ([]byte, string, error) {
 		}
 	} else {
 		return nil, "", fmt.Errorf("GitHub returned no content or SHA")
+	}
+	if ghFile.Content != "" {
+		if err := p.cacheDownloadedBlob(ghFile.SHA, ghFile.Size, raw); err != nil {
+			return nil, "", err
+		}
 	}
 
 	return raw, ghFile.SHA, nil
@@ -687,6 +697,11 @@ func retryableBlobError(err error) bool {
 // download has a size-aware deadline instead of the API client's 30s total
 // timeout, and transient failures are retried.
 func (p *Publisher) fetchBlob(sha string, size int64) ([]byte, error) {
+	if p.blobCache != nil {
+		if raw := p.blobCache.get(sha, size); raw != nil {
+			return raw, nil
+		}
+	}
 	backoff := p.blobBackoff
 	if backoff == nil {
 		backoff = defaultBlobBackoff
@@ -694,7 +709,13 @@ func (p *Publisher) fetchBlob(sha string, size int64) ([]byte, error) {
 	path := "git/blobs/" + sha
 	for attempt := 1; ; attempt++ {
 		raw, err := p.fetchBlobOnce(sha, size)
-		if err == nil || attempt > len(backoff) || !retryableBlobError(err) {
+		if err == nil {
+			if err := p.cacheDownloadedBlob(sha, size, raw); err != nil {
+				return nil, err
+			}
+			return raw, nil
+		}
+		if attempt > len(backoff) || !retryableBlobError(err) {
 			return raw, err
 		}
 		wait := backoff[attempt-1]

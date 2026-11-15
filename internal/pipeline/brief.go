@@ -592,6 +592,10 @@ func (e *InvalidBriefYAMLError) Unwrap() error { return e.Err }
 // retried forever; anything else (transport, quota, cancellation) is returned
 // for the caller's retry handling.
 func generationFailure(err error, what string) error {
+	var invalid *InvalidBriefYAMLError
+	if errors.As(err, &invalid) {
+		return invalid
+	}
 	var finish *llm.FinishReasonError
 	if errors.As(err, &finish) {
 		return &InvalidBriefYAMLError{Err: err, Raw: finish.Text}

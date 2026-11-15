@@ -36,6 +36,8 @@ type fakeFeedRepo struct {
 	files         map[string][]byte
 	requests      []string
 	failPut       string
+	failRead      string
+	omitContents  bool
 	racePut       map[string][]byte
 	blobs         map[string][]byte
 	trees         map[string]map[string][]byte
@@ -279,6 +281,10 @@ func (r *fakeFeedRepo) serve(w http.ResponseWriter, req *http.Request) {
 	}
 	path := strings.TrimPrefix(endpoint, "contents/")
 	r.requests = append(r.requests, req.Method+" "+path)
+	if req.Method == http.MethodGet && path == r.failRead {
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
 
 	if req.Method == http.MethodPut {
 		if path == r.failPut {
@@ -322,10 +328,14 @@ func (r *fakeFeedRepo) serve(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if content, ok := source[path]; ok {
+		encoded := base64.StdEncoding.EncodeToString(content)
+		if r.omitContents {
+			encoded = ""
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"sha":     gitBlobSHA(content),
 			"size":    len(content),
-			"content": base64.StdEncoding.EncodeToString(content),
+			"content": encoded,
 		})
 		return
 	}
@@ -716,9 +726,10 @@ func TestPublishSTIXBundleFetchesOnlyWindowSegments(t *testing.T) {
 	}
 	rollingPUT := repo.requested("PUT site/static" + index.Rolling.Path)
 	indexPUT := repo.requested("PUT site/static/stix/index.json")
-	aliasPUT := repo.requested("PUT site/static/stix.json")
-	if rollingPUT < 0 || indexPUT < 0 || aliasPUT < 0 || (rollingPUT >= indexPUT || indexPUT >= aliasPUT) {
-		t.Fatalf("publication order must be immutable -> index -> alias; requests: %v", repo.requests)
+	aliasRead := repo.requested("GET site/static/stix.json")
+	treePOST := repo.requested("POST git/trees")
+	if rollingPUT < 0 || indexPUT < 0 || aliasRead < 0 || treePOST < 0 || (rollingPUT >= indexPUT || indexPUT >= aliasRead || aliasRead >= treePOST) {
+		t.Fatalf("publication order must be immutable -> index -> alias reference -> tree; requests: %v", repo.requests)
 	}
 }
 
@@ -968,7 +979,7 @@ func TestPublishSTIXBundleAliasFailureKeepsNewIndexValidAndRetries(t *testing.T)
 	_, oldAlias := seedPriorSTIXIndex(t, repo)
 	brief := putRecentSTIXSource(t, repo)
 	month := SegmentKey(mustParseTime(t, brief.PublishedAt))
-	repo.failPut = "site/static/stix/" + month + ".json"
+	repo.failRead = "site/static/stix/" + month + ".json"
 	if err := p.PublishSTIXBundle(); err == nil {
 		t.Fatal("expected compatibility alias refresh failure")
 	}
@@ -983,7 +994,7 @@ func TestPublishSTIXBundleAliasFailureKeepsNewIndexValidAndRetries(t *testing.T)
 	if !bytes.Equal(repo.files["site/static/stix.json"], oldAlias) {
 		t.Fatal("rolling compatibility alias changed after earlier month alias failed")
 	}
-	repo.failPut = ""
+	repo.failRead = ""
 	if err := p.PublishSTIXBundle(); err != nil {
 		t.Fatalf("retrying alias refresh: %v", err)
 	}
@@ -1154,7 +1165,7 @@ func TestFlushSegmentedPropagatesSTIXPublicationFailure(t *testing.T) {
 	repairAt := now.Add(-40 * 24 * time.Hour)
 	repo.putSegment(t, brokenKey, BundleBrief{ID: "existing", Title: "Existing", PublishedAt: repairAt.Format(time.RFC3339)})
 	repo.putJSON(t, manifestPath, &SegmentManifest{Version: "v1", Segments: []SegmentEntry{{Path: segmentPath(brokenKey), BriefCount: 1}}})
-	repo.failPut = "site/static/stix.json"
+	repo.failRead = "site/static/stix.json"
 	p.pending = []BundleBrief{{ID: "new", Slug: "new", Title: "New", PublishedAt: now.Format(time.RFC3339)}}
 	if err := p.FlushSegmented(); err == nil {
 		t.Fatal("expected segmented flush to return STIX publication failure")
@@ -1168,7 +1179,7 @@ func TestFlushSegmentedPropagatesSTIXPublicationFailure(t *testing.T) {
 	if len(p.pending) != 1 {
 		t.Fatalf("pending briefs cleared after STIX failure: %#v", p.pending)
 	}
-	repo.failPut = ""
+	repo.failRead = ""
 	if err := p.FlushSegmented(); err != nil {
 		t.Fatalf("retry after repairing STIX source failed: %v", err)
 	}

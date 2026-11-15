@@ -44,13 +44,39 @@ func (c *cachedClient) Generate(ctx context.Context, prompt, system string) (str
 	return c.inner.Generate(ctx, prompt, system)
 }
 
-// Grounding verdicts and generation failures are deliberately not memoized.
-// Durable pipeline stages decide whether a validated candidate can be resumed.
+// Only initial assembly is memoized: an identical successful generation can
+// survive checkpoint invalidation while current domain validation and independent
+// grounding still run. Verdicts stay live, as do repairs so an unsuccessful
+// rewrite can be sampled again within the pipeline's durable retry budget.
 func (c *cachedClient) GenerateStructured(ctx context.Context, prompt, system string, schema *Schema, out any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return c.inner.GenerateStructured(ctx, prompt, system, schema, out)
+	if callMetadata(ctx).Stage != "assembly" || schema == nil {
+		return c.inner.GenerateStructured(ctx, prompt, system, schema, out)
+	}
+	// Keep constrained generations separate from unconstrained JSON artifacts,
+	// even when their model, text and expected Go shape happen to match.
+	digest := sha256.Sum256([]byte(CachePolicyVersion + "\x00structured-generation-v1\x00" + c.model + "\x00" + schemaKey(schema) + "\x00" + system + "\x00" + prompt))
+	key := hex.EncodeToString(digest[:])
+	if text, ok := readPersistent(ctx, c.store, c.logger, c.model, key); ok {
+		if err := fillFresh(out, func(fresh any) error { return DecodeStructured(text, fresh) }); err == nil {
+			return nil
+		}
+		cacheLog(ctx, c.logger, c.model, key, "invalid")
+	}
+	if err := fillFresh(out, func(fresh any) error {
+		return c.inner.GenerateStructured(ctx, prompt, system, schema, fresh)
+	}); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if encoded, err := json.Marshal(out); err == nil {
+		writePersistent(ctx, c.store, c.logger, c.model, key, string(encoded))
+	}
+	return nil
 }
 func (c *cachedClient) GenerateJSON(ctx context.Context, prompt, system string, out any) error {
 	if err := ctx.Err(); err != nil {

@@ -191,7 +191,7 @@ func mergeStructuredCVEs(existing, verified []BundleCVE, excluded map[string]boo
 		verifiedByID[strings.ToUpper(strings.TrimSpace(cve.ID))] = cve
 	}
 
-	merged := make([]BundleCVE, 0, len(existing)+len(verified))
+	merged := make([]BundleCVE, 0, len(existing))
 	for _, cve := range existing {
 		id := strings.ToUpper(strings.TrimSpace(cve.ID))
 		if id == "" || excluded[id] {

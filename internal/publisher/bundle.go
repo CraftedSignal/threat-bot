@@ -544,10 +544,10 @@ func NormalizePublicationMetadata(brief BundleBrief) BundleBrief {
 // MergeBriefs merges new current snapshots into an append-only publication
 // history. Existing order is preserved and new IDs are appended.
 func MergeBriefs(existing, incoming []BundleBrief, revisedAt time.Time) ([]BundleBrief, error) {
-	byID := make(map[string]BundleBrief, len(existing)+len(incoming))
-	eventIDs := make(map[string]string, len(existing)+len(incoming))
-	slugs := make(map[string]string, len(existing)+len(incoming))
-	order := make([]string, 0, len(existing)+len(incoming))
+	byID := make(map[string]BundleBrief, len(existing))
+	eventIDs := make(map[string]string, len(existing))
+	slugs := make(map[string]string, len(existing))
+	order := make([]string, 0, len(existing))
 
 	register := func(b BundleBrief) error {
 		if strings.TrimSpace(b.ID) == "" {
@@ -726,7 +726,7 @@ func changedPublicationFields(oldState, newState []byte) []string {
 	if json.Unmarshal(oldState, &oldFields) != nil || json.Unmarshal(newState, &newFields) != nil {
 		return nil
 	}
-	keys := make(map[string]struct{}, len(oldFields)+len(newFields))
+	keys := make(map[string]struct{}, len(oldFields))
 	for key := range oldFields {
 		keys[key] = struct{}{}
 	}

@@ -126,7 +126,9 @@ func (d *DB) NextIngestionCandidates(limit int) ([]IngestionCandidate, error) {
 		payloadBytes += len(c.Payload)
 	}
 	err = rows.Err()
-	_ = rows.Close()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, err
 	}

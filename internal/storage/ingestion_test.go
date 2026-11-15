@@ -220,3 +220,32 @@ func TestIngestionMigrationCreatesDurableQueue(t *testing.T) {
 		t.Fatalf("fair retry index missing: %v", err)
 	}
 }
+
+func TestIngestionMigrationPreservesExistingQueueAndWatermark(t *testing.T) {
+	db, err := Open(t.TempDir() + "/queue.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	at := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	candidate := IngestionCandidate{SourceID: "retained", Source: "stream", Revision: "r1", Payload: "retained payload"}
+	if err := db.CommitIngestion("stream", at, []IngestionCandidate{candidate}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`DROP INDEX ingestion_delivery_fair; CREATE INDEX ingestion_delivery ON ingestion_candidates(delivered_at,queued_at)`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := migrate(db.db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := db.GetScraperState("stream")
+	if err != nil || state == nil || !state.LastPoll.Equal(at) {
+		t.Fatalf("migration changed durable watermark: %+v %v", state, err)
+	}
+	batch, err := db.NextIngestionCandidates(10)
+	if err != nil || len(batch) != 1 || batch[0] != candidate {
+		t.Fatalf("migration lost or changed queued work: %+v %v", batch, err)
+	}
+}

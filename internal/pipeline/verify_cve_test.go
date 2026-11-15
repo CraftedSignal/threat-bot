@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -237,32 +238,73 @@ func TestCVEMetaFromNVD(t *testing.T) {
 	}
 }
 
-// CVE-2026-48362 lists 23 ColdFusion 2023 builds ahead of 12 ColdFusion 2025
-// builds. Capping before collapsing kept 20 identical-looking 2023 entries and
-// dropped ColdFusion 2025 entirely.
-func TestCPEsFromNVD_CollapsesBuildsBeforeCap(t *testing.T) {
+// Exact builds still share the existing bounded space fairly across versions;
+// retaining source scope must not let one version crowd out all other versions.
+func TestCPEsFromNVDPreservesVersionsWithinCap(t *testing.T) {
 	var matches []nvdCpeMatch
-	add := func(version string, updates int) {
-		matches = append(matches, nvdCpeMatch{Vulnerable: true, Criteria: "cpe:2.3:a:adobe:coldfusion:" + version + ":-:*:*:*:*:*:*"})
-		for i := 1; i <= updates; i++ {
+	for _, version := range []string{"2023", "2025"} {
+		for i := 0; i < 23; i++ {
 			matches = append(matches, nvdCpeMatch{Vulnerable: true, Criteria: fmt.Sprintf("cpe:2.3:a:adobe:coldfusion:%s:update%d:*:*:*:*:*:*", version, i)})
 		}
 	}
-	add("2023", 22)
-	add("2025", 11)
-	resp := &nvdDetailResponse{
-		Vulnerabilities: []nvdVulnerability{{
-			CVE: nvdCVEDetail{Configurations: []nvdConfig{{Nodes: []nvdConfigNode{{CpeMatch: matches}}}}},
-		}},
-	}
-
+	resp := &nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{Configurations: []nvdConfig{{Nodes: []nvdConfigNode{{CpeMatch: matches}}}}}}}}
 	got := cpesFromNVD(resp)
-	want := []string{
-		"cpe:2.3:a:adobe:coldfusion:2023:*:*:*:*:*:*:*",
-		"cpe:2.3:a:adobe:coldfusion:2025:*:*:*:*:*:*:*",
+	if len(got) != maxCPEsPerCVE {
+		t.Fatalf("bounded CPE count=%d", len(got))
 	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("cpesFromNVD:\n got: %q\nwant: %q", got, want)
+	counts := map[string]int{}
+	allowed := map[string]bool{}
+	for _, m := range matches {
+		allowed[m.Criteria] = true
+	}
+	for _, cpe := range got {
+		if !allowed[cpe] {
+			t.Fatalf("synthesized unsupported CPE %q", cpe)
+		}
+		if strings.Contains(cpe, ":2023:") {
+			counts["2023"]++
+		}
+		if strings.Contains(cpe, ":2025:") {
+			counts["2025"]++
+		}
+	}
+	if counts["2023"] != 10 || counts["2025"] != 10 {
+		t.Fatalf("one version crowded out another: %v", counts)
+	}
+	for i, j := 0, len(matches)-1; i < j; i, j = i+1, j-1 {
+		matches[i], matches[j] = matches[j], matches[i]
+	}
+	if shuffled := cpesFromNVD(resp); strings.Join(shuffled, "\n") != strings.Join(got, "\n") {
+		t.Fatalf("input order changed bounded source CPEs: %q vs %q", shuffled, got)
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Fatalf("bounded source CPEs not sorted: %q", got)
+	}
+}
+
+func TestCPEsFromNVDBoundedGroupingRespectsEscapedComponents(t *testing.T) {
+	var matches []nvdCpeMatch
+	for i := 0; i < 25; i++ {
+		matches = append(matches, nvdCpeMatch{Vulnerable: true, Criteria: fmt.Sprintf(`cpe:2.3:a:acme:widget\:pro:1.0:update%d:*:*:*:*:*:*`, i)})
+	}
+	const other = "cpe:2.3:a:acme:z_other:1.0:rc1:*:*:*:*:*:*"
+	matches = append(matches, nvdCpeMatch{Vulnerable: true, Criteria: other})
+	resp := &nvdDetailResponse{Vulnerabilities: []nvdVulnerability{{CVE: nvdCVEDetail{Configurations: []nvdConfig{{Nodes: []nvdConfigNode{{CpeMatch: matches}}}}}}}}
+	got := cpesFromNVD(resp)
+	if len(got) != maxCPEsPerCVE || !strings.Contains(strings.Join(got, "\n"), other) {
+		t.Fatalf("escaped product was not grouped without losing exact scope: %q", got)
+	}
+	for _, cpe := range got {
+		found := false
+		for _, m := range matches {
+			if cpe == m.Criteria {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("unsupported CPE synthesized: %q", cpe)
+		}
 	}
 }
 

@@ -655,7 +655,12 @@ func groundingSource(item scraper.RawItem) string {
 	// These values are supplied by dedicated advisory scrapers, not the
 	// extraction model. Generic webpage metadata is not trusted authority.
 	if item.Source == "nvd" || item.Source == "ghsa" || item.Source == "cisa-kev" {
-		for _, key := range []string{"cve_id", "cve", "cves", "affected_ranges"} {
+		keys := []string{"cve_id", "cve", "cves"}
+		// NVD/GHSA ranges already appear in the shared advisory data above.
+		if item.Source == "cisa-kev" {
+			keys = append(keys, "affected_ranges")
+		}
+		for _, key := range keys {
 			if value := item.Metadata[key]; value != "" {
 				source += "\n" + key + ": " + value
 			}

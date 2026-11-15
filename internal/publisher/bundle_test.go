@@ -386,8 +386,8 @@ func TestMergeBriefsByteEquivalentRepublishIsNoOp(t *testing.T) {
 }
 
 // Merged drafts union CPEs from several CVEs and LLM output without the
-// validator running again, so the bundle funnel itself must collapse builds.
-func TestParseBriefYAMLCollapsesCPEBuilds(t *testing.T) {
+// validator running again, so the bundle funnel must preserve every source CPE.
+func TestParseBriefYAMLPreservesCPEBuilds(t *testing.T) {
 	y := `id: brief-x
 title: t
 cpes:
@@ -400,10 +400,11 @@ cpes:
 		t.Fatalf("parse: %v", err)
 	}
 	want := []string{
-		"cpe:2.3:a:adobe:coldfusion:2023:*:*:*:*:*:*:*",
+		"cpe:2.3:a:adobe:coldfusion:2023:update1:*:*:*:*:*:*",
+		"cpe:2.3:a:adobe:coldfusion:2023:update2:*:*:*:*:*:*",
 		"cpe:2.3:a:adobe:coldfusion:2025:update3:*:*:*:*:*:*",
 	}
-	if len(b.CPEs) != len(want) || b.CPEs[0] != want[0] || b.CPEs[1] != want[1] {
+	if !slices.Equal(b.CPEs, want) {
 		t.Errorf("CPEs = %q, want %q", b.CPEs, want)
 	}
 }

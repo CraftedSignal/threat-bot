@@ -138,9 +138,9 @@ type nvdCpeMatch struct {
 const maxCPEsPerCVE = 20
 
 // cpesFromNVD extracts unique vulnerable CPE URIs from an NVD detail response,
-// capped at maxCPEsPerCVE to keep brief frontmatter compact. Builds of one
-// product version are collapsed (see CleanCPEList) before the cap so they
-// can't crowd other products and versions out of the list.
+// capped at maxCPEsPerCVE to keep brief frontmatter compact. When capped, exact
+// bindings share the space across product versions without manufacturing
+// wildcard applicability from their enumerated updates or architectures.
 func cpesFromNVD(resp *nvdDetailResponse) []string {
 	if resp == nil || len(resp.Vulnerabilities) == 0 {
 		return nil
@@ -156,10 +156,39 @@ func cpesFromNVD(resp *nvdDetailResponse) []string {
 		}
 	}
 	cpes := CleanCPEList(criteria)
-	if len(cpes) > maxCPEsPerCVE {
-		cpes = cpes[:maxCPEsPerCVE]
+	if len(cpes) <= maxCPEsPerCVE {
+		return cpes
 	}
-	return cpes
+	// The cleaned input is sorted, so both group and member order are stable
+	// under upstream shuffles. Respect escaped colons in formatted bindings.
+	var groups [][]string
+	indices := map[string]int{}
+	for _, cpe := range cpes {
+		key := cpe
+		if parts := splitCPE(cpe); len(parts) == 13 {
+			key = strings.Join(parts[:6], ":") // binding, part, vendor, product, version
+		}
+		index, ok := indices[key]
+		if !ok {
+			index = len(groups)
+			indices[key] = index
+			groups = append(groups, nil)
+		}
+		groups[index] = append(groups[index], cpe)
+	}
+	out := make([]string, 0, maxCPEsPerCVE)
+	for member := 0; len(out) < maxCPEsPerCVE; member++ {
+		for _, group := range groups {
+			if member < len(group) {
+				out = append(out, group[member])
+				if len(out) == maxCPEsPerCVE {
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sourceIdentifierFromNVD(resp *nvdDetailResponse) string {

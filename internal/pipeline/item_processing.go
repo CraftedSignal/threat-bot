@@ -437,7 +437,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		}
 	}
 
-	briefYAML, err := p.assembler.Assemble(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "assembly"}), item, extraction, sigmaRules)
+	briefYAML, err := p.assembleWithVerifiedEvidence(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "assembly"}), item, extraction, sigmaRules)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 			return ctxErr

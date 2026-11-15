@@ -27,6 +27,14 @@ func ExtractorPredict(client llm.Client) PredictFunc {
 // normalisation granularity. A per-doc extraction error yields an empty
 // prediction (counted as all-false-negatives) rather than aborting the run.
 func Run(ctx context.Context, docs []EvalDoc, predict PredictFunc, norm func(string) string) Report {
+	return Score(CollectPredictions(ctx, docs, predict), norm)
+}
+
+// CollectPredictions extracts each document once in input order. Predictor errors,
+// including cancellation, yield empty predictions; the original context is
+// forwarded to every document, matching Run's per-document failure behavior.
+// The returned results can be scored at multiple granularities without inference.
+func CollectPredictions(ctx context.Context, docs []EvalDoc, predict PredictFunc) []DocResult {
 	results := make([]DocResult, 0, len(docs))
 	for _, d := range docs {
 		pred, err := predict(ctx, d)
@@ -35,5 +43,5 @@ func Run(ctx context.Context, docs []EvalDoc, predict PredictFunc, norm func(str
 		}
 		results = append(results, DocResult{Gold: d.GoldTechniques, Pred: pred})
 	}
-	return Score(results, norm)
+	return results
 }

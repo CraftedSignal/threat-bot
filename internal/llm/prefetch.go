@@ -253,6 +253,16 @@ func (c *PrefetchClient) answer(req Request) (string, bool) {
 
 func (c *PrefetchClient) Cached(req Request, out any) bool {
 	text, ok := c.answer(req)
+	if !ok && req.JSON {
+		text, ok = readPersistent(WithCallMetadata(context.Background(), req.Metadata), c.store, c.logger, c.model, persistentRequestKey(c.model, req))
+		if ok && decodeInto(text, out) == nil {
+			c.mu.Lock()
+			c.answers[requestKey(req.vertexRequest())] = text
+			c.mu.Unlock()
+			return true
+		}
+		return false
+	}
 	if !ok || decodeInto(text, out) != nil {
 		return false
 	}

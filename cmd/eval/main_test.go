@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/craftedsignal/threat-bot/internal/eval"
 )
 
 func TestBuildLLMClientValidatesBeforeProviderSetup(t *testing.T) {
@@ -62,5 +66,62 @@ func TestEvalRejectsInvalidProviderBeforeLoadingDataset(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(outputPath)); !os.IsNotExist(err) {
 		t.Fatalf("invalid config created output directory: %v", err)
+	}
+}
+
+func TestRunEvaluationPredicts149DocumentsOnce(t *testing.T) {
+	docs := make([]eval.EvalDoc, 149)
+	for i := range docs {
+		docs[i] = eval.EvalDoc{GoldTechniques: []string{"T1059.001"}}
+	}
+	calls := 0
+	base, exact := runEvaluation(context.Background(), docs, func(context.Context, eval.EvalDoc) ([]string, error) {
+		calls++
+		return []string{"T1059.003"}, nil
+	})
+	if calls != 149 {
+		t.Fatalf("prediction calls = %d, want 149", calls)
+	}
+	if base.Docs != 149 || base.MicroF1 != 1 || base.MacroF1 != 1 {
+		t.Fatalf("base = %+v", base)
+	}
+	if exact.Docs != 149 || exact.MicroF1 != 0 || exact.MacroF1 != 0 {
+		t.Fatalf("exact = %+v", exact)
+	}
+}
+
+// CPU work stands in for inference without network access or paid calls. The
+// calls/op metric is the useful cost evidence; ns/op is a local simulation.
+func BenchmarkEvaluation149Documents(b *testing.B) {
+	docs := make([]eval.EvalDoc, 149)
+	for i := range docs {
+		docs[i] = eval.EvalDoc{GoldTechniques: []string{"T1059.001"}}
+	}
+	for _, shared := range []bool{false, true} {
+		name := "LegacyTwoPasses"
+		if shared {
+			name = "SharedPredictions"
+		}
+		b.Run(name, func(b *testing.B) {
+			calls := 0
+			digest := [32]byte{}
+			predict := func(context.Context, eval.EvalDoc) ([]string, error) {
+				calls++
+				for i := 0; i < 100; i++ {
+					digest = sha256.Sum256(digest[:])
+				}
+				return []string{"T1059.001"}, nil
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if shared {
+					runEvaluation(context.Background(), docs, predict)
+				} else {
+					eval.Run(context.Background(), docs, predict, eval.BaseTechniqueID)
+					eval.Run(context.Background(), docs, predict, func(s string) string { return s })
+				}
+			}
+			b.ReportMetric(float64(calls)/float64(b.N), "calls/op")
+		})
 	}
 }

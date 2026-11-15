@@ -434,8 +434,13 @@ func TestBriefToMarkdown_DedupesStoredLists(t *testing.T) {
 	if n := strings.Count(out, "range: < 124.0.6367.201"); n != 1 || !strings.Contains(out, "- Chrome\n") {
 		t.Errorf("product and version range not canonically projected:\n%s", out)
 	}
-	if strings.Contains(out, "update1") || !strings.Contains(out, "cpe:2.3:a:adobe:coldfusion:2023:*:*:*:*:*:*:*") {
-		t.Errorf("CPE builds not collapsed:\n%s", out)
+	for _, build := range []string{"update1", "update2"} {
+		if !strings.Contains(out, "cpe:2.3:a:adobe:coldfusion:2023:"+build+":*:*:*:*:*:*") {
+			t.Errorf("exact source CPE %s lost:\n%s", build, out)
+		}
+	}
+	if strings.Contains(out, "cpe:2.3:a:adobe:coldfusion:2023:*:*:*:*:*:*:*") {
+		t.Errorf("CPE scope broadened in public frontmatter:\n%s", out)
 	}
 }
 

@@ -430,39 +430,37 @@ references:
 	}
 }
 
-// NVD enumerates one CPE per build of a product version (update level,
-// target_hw). Those variants must collapse into one wildcarded URI so a single
-// product version doesn't render as 20 identical entries, while distinct
-// products, versions, sw_editions and target_sw stay separate and a lone
-// variant keeps its exact URI.
-func TestCleanCPEList_CollapsesBuildVariants(t *testing.T) {
-	got := CleanCPEList([]string{
-		"cpe:2.3:a:adobe:coldfusion:2023:-:*:*:*:*:*:*",
+// Every CPE component constrains applicability. Cleaning must preserve exact
+// source bindings, including release candidates, editions and architectures.
+func TestCleanCPEListPreservesExactSourceScope(t *testing.T) {
+	input := []string{
 		"cpe:2.3:a:adobe:coldfusion:2023:update1:*:*:*:*:*:*",
-		"cpe:2.3:a:adobe:coldfusion:2023:update10:*:*:*:*:*:*",
-		"cpe:2.3:a:adobe:coldfusion:2025:update3:*:*:*:*:*:*",
+		"cpe:2.3:a:adobe:coldfusion:2023:update2:*:*:*:*:*:*",
+		"cpe:2.3:o:linux:linux_kernel:7.2:rc1:*:*:*:*:*:*",
+		"cpe:2.3:o:linux:linux_kernel:7.2:rc2:*:*:*:*:*:*",
+		"cpe:2.3:a:acme:widget:1.0:*:enterprise:*:*:*:*:*",
+		"cpe:2.3:a:acme:widget:1.0:*:standard:*:*:*:*:*",
+		"cpe:2.3:a:acme:widget:1.0:*:*:en:*:*:*:*",
+		"cpe:2.3:a:acme:widget:1.0:*:*:fr:*:*:*:*",
 		"cpe:2.3:o:microsoft:windows_10_1607:*:*:*:*:*:*:x64:*",
-		"CPE:2.3:o:microsoft:windows_10_1607:*:*:*:*:*:*:x86:*",
-		"cpe:2.3:a:adobe:campaign:7.4.3:9394:*:*:classic:*:*:*",
-		"cpe:2.3:a:adobe:campaign:7.4.3:9399:*:*:classic:*:*:*",
-		"cpe:2.3:a:adobe:campaign:7.4.4:9400:*:*:classic:*:*:*",
-		"cpe:2.3:a:trueconf:trueconf_server:*:*:*:*:*:linux_kernel:*:*",
-		"cpe:2.3:a:trueconf:trueconf_server:*:*:*:*:*:windows:*:*",
+		"cpe:2.3:o:microsoft:windows_10_1607:*:*:*:*:*:*:x86:*",
+		"cpe:2.3:a:acme:widget:1.0:*:*:*:*:*:*:variant1",
+		"cpe:2.3:a:acme:widget:1.0:*:*:*:*:*:*:variant2",
 		`cpe:2.3:a:acme:widget\:pro:1.0:rc1:*:*:*:*:*:*`,
 		`cpe:2.3:a:acme:widget\:pro:1.0:rc2:*:*:*:*:*:*`,
-	})
-	want := []string{
-		"cpe:2.3:a:adobe:coldfusion:2023:*:*:*:*:*:*:*",
-		"cpe:2.3:a:adobe:coldfusion:2025:update3:*:*:*:*:*:*",
-		"cpe:2.3:o:microsoft:windows_10_1607:*:*:*:*:*:*:*:*",
-		"cpe:2.3:a:adobe:campaign:7.4.3:*:*:*:classic:*:*:*",
-		"cpe:2.3:a:adobe:campaign:7.4.4:9400:*:*:classic:*:*:*",
-		"cpe:2.3:a:trueconf:trueconf_server:*:*:*:*:*:linux_kernel:*:*",
-		"cpe:2.3:a:trueconf:trueconf_server:*:*:*:*:*:windows:*:*",
-		`cpe:2.3:a:acme:widget\:pro:1.0:*:*:*:*:*:*:*`,
+		// Explicit wildcards are source facts too, and must not swallow exact entries.
+		"cpe:2.3:o:linux:linux_kernel:*:*:*:*:*:*:*:*",
 	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("CleanCPEList:\n got: %q\nwant: %q", got, want)
+	want := slices.Clone(input)
+	slices.Sort(want)
+	input = append(input, " "+input[0]+" ", input[1], "", "unknown", "not-a-cpe")
+	got := CleanCPEList(input)
+	if !slices.Equal(got, want) {
+		t.Fatalf("source CPE scope changed:\n got: %q\nwant: %q", got, want)
+	}
+	slices.Reverse(input)
+	if reversed := CleanCPEList(input); !slices.Equal(reversed, want) {
+		t.Fatalf("source order changed canonical CPEs: %q", reversed)
 	}
 }
 

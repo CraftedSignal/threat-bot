@@ -544,7 +544,7 @@ func structuredAdvisoryFacts(item scraper.RawItem) string {
 
 // structuredAdvisoryInstruction tells the generator how to use the facts. It
 // is a generation instruction, not source material, so grounding never sees it.
-const structuredAdvisoryInstruction = "\n\nThese structured advisory facts are authoritative. Copy package names, affected and patched version ranges, and CVSS from them exactly; do not infer or adjust ranges from the prose."
+const structuredAdvisoryInstruction = "\n\nThese structured advisory facts are authoritative. Copy package names, affected and patched version ranges, CPE URIs, and CVSS from them exactly; do not infer or adjust ranges from the prose. Keep each range bound to its named product and retain separate release branches. Preserve every CPE component, including release-candidate updates and architectures. An affected upper bound alone does not establish a fixed release."
 
 // structuredAdvisoryData is the data block of structuredAdvisoryFacts: the
 // facts alone, which grounding may treat as source material.
@@ -555,6 +555,9 @@ func structuredAdvisoryData(item scraper.RawItem) string {
 	var b strings.Builder
 	if v := strings.TrimSpace(item.Metadata["affected_packages"]); v != "" {
 		fmt.Fprintf(&b, "Affected packages (ecosystem/name, vulnerable range, patched versions):\n%s\n", v)
+	}
+	if v := strings.TrimSpace(item.Metadata["affected_ranges"]); v != "" {
+		fmt.Fprintf(&b, "Affected version ranges (each line names its product; semicolon-separated ranges are separate release branches):\n%s\n", v)
 	}
 	if v := strings.TrimSpace(item.Metadata["cpes"]); v != "" {
 		fmt.Fprintf(&b, "Affected CPEs: %s\n", strings.ReplaceAll(v, " ", ", "))

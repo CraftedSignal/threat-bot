@@ -454,61 +454,28 @@ func CapTerm(term string) string {
 	return strings.TrimRight(term[:cut], " ,;:-/")
 }
 
-// CleanCPEList trims, validates and de-duplicates CPE 2.3 URIs. NVD lists one
-// CPE per build of a product version (coldfusion:2023:update1 through update22,
-// windows_10_1607 on x64 and x86); URIs that differ only in those build
-// components collapse into one URI with them wildcarded. A lone build keeps
-// its exact URI.
+// CleanCPEList trims, filters and sorts exact CPE 2.3 bindings. Every component
+// constrains applicability: even several enumerated updates or architectures
+// do not establish that an unrestricted wildcard is affected.
 func CleanCPEList(in []string) []string {
 	if len(in) == 0 {
 		return nil
 	}
-	var keys []string
-	first := make(map[string]string, len(in))
-	builds := make(map[string]map[string]bool, len(in))
+	var out []string
+	seen := make(map[string]bool, len(in))
 	for _, v := range in {
 		trimmed := strings.TrimSpace(v)
 		if trimmed == "" || isPlaceholder(trimmed) || !strings.HasPrefix(strings.ToLower(trimmed), "cpe:2.3:") {
 			continue
 		}
-		key := strings.ToLower(cpeBuildKey(trimmed))
-		if _, ok := first[key]; !ok {
-			first[key] = trimmed
-			builds[key] = map[string]bool{}
-			keys = append(keys, key)
-		}
-		builds[key][strings.ToLower(trimmed)] = true
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		if len(builds[key]) == 1 {
-			out = append(out, first[key])
+		if seen[trimmed] {
 			continue
 		}
-		out = append(out, cpeBuildKey(first[key]))
+		seen[trimmed] = true
+		out = append(out, trimmed)
 	}
+	sort.Strings(out)
 	return out
-}
-
-// cpeBuildComponents are the CPE 2.3 components that only distinguish builds
-// of one product version: update, edition, language, target_hw and other.
-var cpeBuildComponents = []int{6, 7, 8, 11, 12}
-
-// cpeBuildKey wildcards the build components of a CPE 2.3 URI. URIs without
-// the 13 components of the formatted-string binding are returned unchanged,
-// so they only de-duplicate exactly.
-func cpeBuildKey(cpe string) string {
-	parts := splitCPE(cpe)
-	if len(parts) != 13 {
-		return cpe
-	}
-	for _, i := range cpeBuildComponents {
-		parts[i] = "*"
-	}
-	return strings.Join(parts, ":")
 }
 
 // splitCPE splits a CPE 2.3 formatted string on colons that are not

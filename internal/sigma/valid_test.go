@@ -1,6 +1,7 @@
 package sigma
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -107,5 +108,60 @@ func TestParserAdoptionRejectsMalformedAuthoredValues(t *testing.T) {
 				t.Fatal("malformed authored value was accepted")
 			}
 		})
+	}
+}
+
+func TestTimeframeProblemsFollowSigmaParser(t *testing.T) {
+	const selection = "selection:\n  Image: example.exe\ncondition: selection\n"
+	const typeProblem = "detection.timeframe' must be a string"
+	const emptyProblem = "detection.timeframe' must not be empty"
+	const unitProblem = "detection.timeframe' must include a time unit"
+	logSource := LogSource{Category: "process_creation", Product: "windows"}
+	for _, tc := range []struct {
+		name, timeframe, wantProblem string
+	}{
+		{"integer", "timeframe: 60\n", typeProblem},
+		{"float", "timeframe: 1.5\n", typeProblem},
+		{"boolean", "timeframe: true\n", typeProblem},
+		{"null", "timeframe: null\n", typeProblem},
+		{"sequence", "timeframe: [5m]\n", typeProblem},
+		{"mapping", "timeframe: {duration: 5m}\n", typeProblem},
+		{"empty string", "timeframe: ''\n", emptyProblem},
+		{"whitespace string", "timeframe: ' '\n", emptyProblem},
+		{"numeric string", "timeframe: '60'\n", unitProblem},
+		{"numeric exponent", "timeframe: '1e3'\n", unitProblem},
+		{"trimmed numeric", "timeframe: ' 60 '\n", unitProblem},
+		{"minutes", "timeframe: 5m\n", ""},
+		{"months", "timeframe: 3M\n", ""},
+		{"absent", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := selection + tc.timeframe
+			input := detection(t, source)
+			original := detection(t, source)
+			problems, warnings := CheckDetection(input)
+			if tc.wantProblem == "" {
+				if len(problems) != 0 || len(warnings) != 0 {
+					t.Fatalf("valid timeframe: problems=%q warnings=%q", problems, warnings)
+				}
+			} else if !strings.Contains(strings.Join(problems, "; "), tc.wantProblem) || len(warnings) != 0 {
+				t.Fatalf("invalid timeframe: problems=%q warnings=%q, want problem containing %q", problems, warnings, tc.wantProblem)
+			}
+			if got := Problems("Timeframe", logSource, input); !reflect.DeepEqual(got, problems) {
+				t.Fatalf("Problems=%q, CheckDetection problems=%q", got, problems)
+			}
+			if !reflect.DeepEqual(input, original) {
+				t.Fatalf("validation mutated detection: got %#v, want %#v", input, original)
+			}
+		})
+	}
+
+	warningOnly := detection(t, "selection:\n  CommandLine: -dump\ncondition: selection\ntimeframe: 5m\n")
+	problems, warnings := CheckDetection(warningOnly)
+	if len(problems) != 0 || len(warnings) != 1 || !strings.Contains(warnings[0], "CommandLine|contains") {
+		t.Fatalf("valid timeframe with warning: problems=%q warnings=%q", problems, warnings)
+	}
+	if got := Problems("Timeframe warning", logSource, warningOnly); len(got) != 0 {
+		t.Fatalf("warning became a problem: %q", got)
 	}
 }

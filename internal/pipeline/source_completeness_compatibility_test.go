@@ -12,23 +12,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// These keys were obtained by executing deployed ca9db25's frozen implementation,
+// These keys were obtained by executing the deployed private implementations,
 // including its actual JSON schema serialization and complete prompt inputs.
 // Deliberate future policy changes must also define checkpoint migration behavior.
 func TestSourceCompletenessCheckpointPolicyTransition(t *testing.T) {
-	const policyFingerprint = "acdb15a355a759ce3fd800419dad982b30ee66cb6f83d91eaca2171000187833"
-	const evidenceFingerprint = "9463bbb8c5652445d6dc25074e309901be277dc2bf372670241f2f309f85002d"
-	const inputFingerprint = "21ffc8ae7d60e286a095a9f2a550dd44fb5314c183f4dc40746bbee7b31e94d6"
 	// Reach the quality stage on invalidation rather than the thin-source filter.
 	item := scraper.RawItem{SourceID: "fixture:compatibility", Source: "fixture", Title: "Example Harbor advisory", URL: "https://vendor.example/harbor", Content: strings.Repeat("Synthetic source material for checkpoint compatibility. ", 3), Enriched: true}
 	for _, tc := range []struct {
-		name     string
-		deployed bool
+		name                                                     string
+		deployed                                                 bool
+		policyFingerprint, evidenceFingerprint, inputFingerprint string
 	}{
-		{name: "deployed policy requires fresh validation", deployed: true},
+		{name: "legacy ca9db25 requires fresh validation", deployed: true,
+			policyFingerprint:   "acdb15a355a759ce3fd800419dad982b30ee66cb6f83d91eaca2171000187833",
+			evidenceFingerprint: "9463bbb8c5652445d6dc25074e309901be277dc2bf372670241f2f309f85002d",
+			inputFingerprint:    "21ffc8ae7d60e286a095a9f2a550dd44fb5314c183f4dc40746bbee7b31e94d6"},
+		{name: "deployed cf12789 requires fresh validation", deployed: true,
+			policyFingerprint:   "8ef1f0304181ce24e9a164d67b65280e778676337e8bac7a863b537a486b123e",
+			evidenceFingerprint: "3343e0a1fde52c79fcca1ed76c58b715ddb2803b341d6cab05bcec1cf813ec91",
+			inputFingerprint:    "74395bbb1ba8bbb4369ad8622028fb2ee0634cf8abdbd7ae9475a8f997ec41cd"},
 		{name: "current policy resumes editorial hold"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			policyFingerprint, evidenceFingerprint, inputFingerprint := tc.policyFingerprint, tc.evidenceFingerprint, tc.inputFingerprint
 			db := mustOpenTestDB(t)
 			defer db.Close()
 			calls := 0

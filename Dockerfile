@@ -29,6 +29,7 @@ COPY --from=builder /runtime/ /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder --chmod=755 /threat-bot /app/threat-bot
 COPY LICENSE /usr/share/licenses/threat-bot/
+COPY internal/scraper/jetstream_zstd_dictionary.LICENSE /usr/share/licenses/jetstream/LICENSE
 WORKDIR /app
 USER 1000:1000
 ENTRYPOINT ["/app/threat-bot"]

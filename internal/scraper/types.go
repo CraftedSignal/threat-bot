@@ -15,6 +15,17 @@ type Scraper interface {
 	Poll(ctx context.Context, since time.Time) ([]RawItem, error)
 }
 
+// streamPoller exposes the safely consumed prefix independently of candidates.
+// eligible excludes candidates already durable or complete, so overlap cannot
+// pin a capped poll. It is called only for relevant discovery candidates.
+type streamPoller interface {
+	PollWindow(context.Context, time.Time, func(RawItem) (bool, error)) (streamWindow, error)
+}
+type streamWindow struct {
+	Items     []RawItem
+	Watermark time.Time
+}
+
 // ItemFetcher is implemented by scrapers that can fetch specific items by
 // source ID. `threat-bot sources replay` uses it for sources whose polls are
 // capped and so cannot replay an older window.

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -194,7 +195,27 @@ func TestSourceCompletenessEvidenceCorrectionPreservesBoundedRepair(t *testing.T
 			p.cveEnricher = NewCVEEnricher(p.cveVerifier)
 			item := scraper.RawItem{SourceID: "completeness:synthetic", Source: "nvd", Title: "Example Harbor CVE-2099-4001", URL: "https://vendor.example/harbor", Content: "Example Harbor permits configuration changes with low privileges (CVE-2099-4001).", Enriched: true}
 			state := processingCandidate{Item: item, BriefYAML: client.initial, Score: 5, Confidence: 1, Extraction: &ExtractionResult{CVEs: []string{"CVE-2099-4001"}, AffectedProducts: []string{"Example Harbor"}}}
-			if err := p.processCandidate(context.Background(), p.processingInputKey(item), state); err != nil {
+			err := p.processCandidate(context.Background(), p.processingInputKey(item), state)
+			if tc.rejectCorrection {
+				var contract *omissionEvidenceContractError
+				if !errors.As(err, &contract) {
+					t.Fatalf("unverifiable checker evidence must create typed hold: %v", err)
+				}
+				cp, cpErr := db.GetProcessingCheckpoint(item.SourceID)
+				if cpErr != nil || cp == nil {
+					t.Fatalf("missing contract checkpoint: %+v %v", cp, cpErr)
+				}
+				var held processingCandidate
+				if err := yaml.Unmarshal([]byte(cp.Payload), &held); err != nil || !p.groundingFailureHeld(held) {
+					t.Fatalf("unverifiable evidence was not durably held: %v", err)
+				}
+				if err := p.processCandidate(context.Background(), p.processingInputKey(item), held); err != nil {
+					t.Fatal(err)
+				}
+				if seen, _ := db.HasSeen(item.SourceID); seen {
+					t.Fatal("invalid checker output consumed source")
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			if client.checks != tc.checks || client.repairs != tc.repairs || client.corrections != tc.corrections {

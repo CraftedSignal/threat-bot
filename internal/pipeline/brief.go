@@ -705,7 +705,7 @@ func (a *BriefAssembler) Assemble(ctx context.Context, item scraper.RawItem, ext
 	prompt += structuredAdvisoryFacts(item)
 
 	var generated generatedBrief
-	if err := generateStructured(ctx, a.client, prompt, briefSystemPrompt, briefResponseSchema, &generated, "brief assembly LLM call"); err != nil {
+	if err := generateStructured(ctx, a.client, prompt, assemblySystemPrompt(item), briefResponseSchema, &generated, "brief assembly LLM call"); err != nil {
 		return "", err
 	}
 	check, err := generated.document()

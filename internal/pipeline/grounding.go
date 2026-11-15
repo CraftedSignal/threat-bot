@@ -62,8 +62,8 @@ type groundingIssue struct {
 	Field       string `json:"field"`
 	BriefQuote  string `json:"brief_quote"`
 	Reason      string `json:"reason"`
-	Subject     string `json:"subject"`
-	SourceQuote string `json:"source_quote"`
+	Subject     string `json:"subject" desc:"For material_omission, copy one eligible completeness subject exactly. Empty for other kinds."`
+	SourceQuote string `json:"source_quote" desc:"For material_omission, a verbatim source passage including its subject and missing fact, or the complete text of a CVE/product-scoped primary evidence field. Empty for other kinds."`
 }
 
 // groundingReport is the structured answer of the grounding check.
@@ -123,6 +123,8 @@ const groundingSystem = groundingFactSystem + `
 
 Also check material completeness of this entire brief. If an explicit source fact is missing and changes applicability or the defender response, report kind "material_omission". This includes affected products/version ranges, fixed releases or remediation, authentication/privilege requirements, required dependencies or user interaction, and concrete impact limits. Set subject to the target product name or CVE, source_quote to a VERBATIM source passage containing that subject and the missing fact, and field to the field needing repair. Include identifying context, not a bare version or prerequisite detached from its product. Do not borrow a neighboring product's version, role, fix or CVE. Do not report a fact already covered in another brief field as omitted. Brief_quote may be empty for omissions.
 
+Use an exact subject from the eligible completeness subjects supplied with the brief. For structured primary CVE evidence, source_quote may instead be the complete decoded text field of one fact whose CVE and product match the brief; its explicit record scope supplies the identity. Do not splice fields or quote a detached version fragment. A record-wide fact without a product must name the brief's product in its text.
+
 Missing minor background, credits, or incidental details can be kind "omission" and are advisory. Unspecified source facts are gaps, not facts to invent: do not demand a fixed release, role, impact, exploit chain, detector or IOC that the supplied source does not establish. Use empty subject/source_quote for unsupported claims and minor omissions.
 
 Return an empty issues array only when statements are supported and no material source fact is omitted.`
@@ -166,8 +168,12 @@ func validateMaterialOmission(issue groundingIssue, source, brief string) error 
 	// value. Bind a complete verbatim field to that explicit scope rather than
 	// requiring the CVE identifier to be repeated inside an ordinary sentence.
 	scoped := materialQuoteInScopedFact(issue, source, doc)
+	var quotedFact cnaSourceFact
+	structuredQuote := json.Unmarshal([]byte(issue.SourceQuote), &quotedFact) == nil && quotedFact.CVEID != ""
 	mentionsSubject := strings.Contains(quote, subject) || productNameLocation(issue.SourceQuote, issue.Subject) != nil
-	if !scoped && (!strings.Contains(normalizeForQuote(source), quote) || !mentionsSubject) {
+	// A complete structured record carries a CVE even when its product is a
+	// neighbor. Its metadata must not bypass the explicit product binding.
+	if !scoped && (structuredQuote || !strings.Contains(normalizeForQuote(source), quote) || !mentionsSubject) {
 		return fmt.Errorf("material omission requires a verbatim source quote with its target subject")
 	}
 	for _, id := range sourceCVEPattern.FindAllString(issue.SourceQuote, -1) {
@@ -184,7 +190,11 @@ func materialQuoteInScopedFact(issue groundingIssue, source string, doc map[stri
 	products := yamlStringList(doc["affected_products"])
 	for _, line := range strings.Split(source, "\n") {
 		var fact cnaSourceFact
-		if json.Unmarshal([]byte(line), &fact) != nil || !ids[fact.CVEID] || normalizeForQuote(fact.Text) != normalizeForQuote(issue.SourceQuote) {
+		if json.Unmarshal([]byte(line), &fact) != nil || !ids[fact.CVEID] {
+			continue
+		}
+		quote := normalizeForQuote(issue.SourceQuote)
+		if normalizeForQuote(fact.Text) != quote && normalizeForQuote(line) != quote {
 			continue
 		}
 		switch fact.Kind {
@@ -244,11 +254,18 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 	if completeness {
 		system = groundingSystem
 		schema = groundingReportSchema
+		subjects, _ := json.Marshal(materialOmissionSubjects(briefYAML))
+		prompt += "\n\nEligible completeness subjects (copy exactly for material_omission):\n" + string(subjects)
 	}
 
 	var report groundingReport
 	if err := g.llm.GenerateStructured(ctx, prompt, system, schema, &report); err != nil {
 		return nil, fmt.Errorf("grounding check LLM call: %w", err)
+	}
+	if completeness {
+		if err := g.repairMaterialOmissionEvidence(ctx, source, briefYAML, &report); err != nil {
+			return nil, fmt.Errorf("grounding completeness evidence: %w", err)
+		}
 	}
 
 	normalizedBrief := normalizeForQuote(briefYAML)

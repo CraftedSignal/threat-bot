@@ -1,6 +1,8 @@
 package scraper
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -10,11 +12,15 @@ type SourceHealth struct {
 	Source                    string
 	LastSuccess               time.Time
 	LastError                 time.Time
+	LastErrorMessage          string
+	LastErrorClass            string
 	LastErrorExpectedUpstream bool
 	ConsecutiveErrors         int
 	TotalItems                int
 	SilentPolls               int // consecutive polls with 0 new items
 	pollInterval              time.Duration
+	lastErrorLog              time.Time
+	lastErrorLogFingerprint   string
 }
 
 // IsHealthy returns true if the source has no concerning indicators.
@@ -105,6 +111,9 @@ func (r *Runner) recordSuccess(source string, newItems int) {
 	h.Source = source
 	h.LastSuccess = time.Now()
 	h.LastErrorExpectedUpstream = false
+	h.LastErrorMessage = ""
+	h.LastErrorClass = ""
+	h.lastErrorLogFingerprint = ""
 	h.ConsecutiveErrors = 0
 	h.TotalItems += newItems
 
@@ -117,16 +126,38 @@ func (r *Runner) recordSuccess(source string, newItems int) {
 	r.health[source] = h
 }
 
-// recordError updates health metrics after a poll error.
-func (r *Runner) recordError(source string, expectedUpstream bool) {
+// Persistent failures retain their health state on every retry, but repeat
+// diagnostics only every six hours. A changed failure or successful recovery
+// starts a new diagnostic immediately.
+const sourceErrorLogInterval = 6 * time.Hour
+
+// recordError returns the updated health and whether a diagnostic is due.
+func (r *Runner) recordError(source string, err error) (SourceHealth, bool) {
 	r.healthMu.Lock()
 	defer r.healthMu.Unlock()
 
 	h := r.health[source]
+	now := time.Now()
+	errorClass := scraperErrorClass(err)
+	message := boundedScraperError(err)
+	fingerprint := errorClass
+	if errorClass == "unexpected" && err != nil {
+		// Distinct failures must not hide behind the same redacted display text.
+		// Keep their identity internal; never retain credential-bearing raw URLs.
+		fingerprint = fmt.Sprintf("%s:%x", errorClass, sha256.Sum256([]byte(err.Error())))
+	}
+	logFailure := h.ConsecutiveErrors == 0 || h.lastErrorLogFingerprint != fingerprint || now.Sub(h.lastErrorLog) >= sourceErrorLogInterval
+	if logFailure {
+		h.lastErrorLog = now
+		h.lastErrorLogFingerprint = fingerprint
+	}
 	h.Source = source
-	h.LastError = time.Now()
-	h.LastErrorExpectedUpstream = expectedUpstream
+	h.LastError = now
+	h.LastErrorMessage = message
+	h.LastErrorClass = errorClass
+	h.LastErrorExpectedUpstream = isExpectedUpstreamScraperError(err)
 	h.ConsecutiveErrors++
 
 	r.health[source] = h
+	return h, logFailure
 }

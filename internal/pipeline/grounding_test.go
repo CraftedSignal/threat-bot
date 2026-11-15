@@ -276,7 +276,11 @@ type scriptedGroundingLLM struct {
 }
 
 func (s scriptedGroundingLLM) GenerateStructured(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
-	*out.(*groundingReport) = s.report
+	report, ok := out.(*groundingReport)
+	if !ok {
+		return errUnexpectedStructured
+	}
+	*report = s.report
 	return nil
 }
 

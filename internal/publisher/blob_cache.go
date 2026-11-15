@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-// Leave room on the dedicated 256 MiB volume for a maximum-size feed file.
+// Retain the canonical segments and current STIX artifacts between full passes.
+// Leave room on the dedicated 512 MiB volume for a maximum-size feed file.
 // Writes also evict before creating their temporary file, bounding peak usage.
-const defaultBlobCacheBytes int64 = 128 << 20
+const defaultBlobCacheBytes int64 = 384 << 20
 
 // WithBlobCache enables a bounded disk cache of immutable raw Git blob bytes.
 // dir must be dedicated to this cache. Empty disables it. Metadata lookups and

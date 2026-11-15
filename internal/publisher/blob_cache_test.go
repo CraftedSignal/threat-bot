@@ -13,6 +13,54 @@ import (
 	"testing"
 )
 
+func TestBlobCacheRetainsCurrentFeedWorkingSetBetweenPasses(t *testing.T) {
+	_, p := newFakeFeedRepo(t)
+	dir := t.TempDir()
+	WithBlobCache(dir)(p)
+	// Four independent 80 MiB artifacts fit the deployed working set. A fifth
+	// must evict the oldest before writing, leaving headroom on a 512 MiB volume.
+	data := make([]byte, 80<<20)
+	var shas []string
+	for i := range 5 {
+		data[0] = byte(i)
+		sha := gitBlobSHA(data)
+		if err := p.cacheDownloadedBlob(sha, int64(len(data)), data); err != nil {
+			t.Fatal(err)
+		}
+		shas = append(shas, sha)
+		if i == 3 {
+			for _, cached := range shas {
+				if got := p.blobCache.get(cached, int64(len(data))); got == nil {
+					t.Fatal("current feed working set was evicted before the next pass")
+				}
+			}
+		}
+	}
+	if got := p.blobCache.get(shas[0], int64(len(data))); got != nil {
+		t.Fatal("cache did not evict the oldest artifact before exceeding its budget")
+	}
+	for _, sha := range shas[1:] {
+		if got := p.blobCache.get(sha, int64(len(data))); got == nil {
+			t.Fatal("cache lost an artifact from the current feed working set")
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+	}
+	if total > 384<<20 {
+		t.Fatalf("cache retained %d bytes beyond its deployed budget", total)
+	}
+}
+
 func TestBlobCacheStagedReadsAvoidDownload(t *testing.T) {
 	repo, p := newFakeFeedRepo(t)
 	WithBlobCache(t.TempDir())(p)

@@ -36,7 +36,7 @@ The example enables only `sources.cisa_kev`. Other source entries are opt-in. Mo
 
 `publish.repo_slug` uses `owner/repository`; `publish.site_url` sets the installation's public website origin. `publish.feed_public_key` must contain 64 hexadecimal characters (32 bytes). It is a **public compatibility value**, not a confidentiality key. Defaults for a configured publisher are branch `main`, author name `threat-bot`, and author email `threat-bot@users.noreply.github.com`; override them for your installation. See [examples/config.github.yaml](../examples/config.github.yaml) and [feed protocol](feed-protocol.md).
 
-`publish.cache_dir` optionally enables the service's raw Git blob cache in a dedicated writable directory. It retains at most 128 MiB, verifies blob SHA and size, and keeps current Git metadata and publication conflict checks authoritative. Empty disables it; cache filesystem failures fall back to remote reads. Keep this directory separate from SQLite state.
+`publish.cache_dir` optionally enables the service's raw Git blob cache in a dedicated writable directory. It retains at most 384 MiB to keep the current feed working set between passes; provide a dedicated volume of at least 512 MiB. It verifies blob SHA and size and keeps current Git metadata and publication conflict checks authoritative. Empty disables it; cache filesystem failures fall back to remote reads. Keep this directory separate from SQLite state.
 
 `github.app_id`, `github.installation_id`, and `github.private_key_path` must be configured together. A configured App takes precedence; otherwise `GITHUB_TOKEN` can supply authentication. Local draft inspection does not require a publisher or model.
 

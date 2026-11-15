@@ -79,6 +79,7 @@ type GitHubConfig struct {
 }
 
 type PublishConfig struct {
+	CacheDir      string `yaml:"cache_dir"` // optional dedicated raw Git blob disk cache
 	RepoSlug      string `yaml:"repo_slug"` // owner/repository on GitHub.com
 	SiteURL       string `yaml:"site_url"`
 	Branch        string `yaml:"branch"`

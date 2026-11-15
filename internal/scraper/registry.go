@@ -219,10 +219,7 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 					persistErr = r.db.CommitIngestion(s.Name(), window.Watermark, queued)
 				}
 				if persistErr != nil {
-					mu.Lock()
-					durableErrs = append(durableErrs, fmt.Errorf("%s: durable handoff: %w", s.Name(), persistErr))
-					mu.Unlock()
-					r.recordError(s.Name(), persistErr)
+					failState("durable handoff", persistErr)
 					return
 				}
 			} else {

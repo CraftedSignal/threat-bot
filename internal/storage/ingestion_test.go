@@ -193,6 +193,34 @@ func TestIngestionDeliveryServicesHeldAndFreshUnderContinuousArrivals(t *testing
 	}
 }
 
+func TestIngestionMigrationCreatesDurableQueue(t *testing.T) {
+	path := t.TempDir() + "/queue.db"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`INSERT INTO ingestion_candidates(source_id,revision,source,payload,payload_bytes,queued_at) VALUES('pending','r','stream','payload',7,'2026-11-15T09:00:00Z')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("migration did not create durable queue: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var payload string
+	if err := db.db.QueryRow(`SELECT payload FROM ingestion_candidates WHERE source_id='pending' AND revision='r'`).Scan(&payload); err != nil || payload != "payload" {
+		t.Fatalf("migration lost existing queued work: payload=%q err=%v", payload, err)
+	}
+	var index string
+	if err := db.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='ingestion_delivery_fair'`).Scan(&index); err != nil {
+		t.Fatalf("fair retry index missing: %v", err)
+	}
+}
+
 func TestIngestionMigrationPreservesExistingQueueAndWatermark(t *testing.T) {
 	db, err := Open(t.TempDir() + "/queue.db")
 	if err != nil {

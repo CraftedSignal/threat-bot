@@ -222,3 +222,87 @@ func TestBlueskyDurableCancellationPersistsSafePrefixForRetry(t *testing.T) {
 		t.Fatalf("canceled candidate lost: %v %v", items, err)
 	}
 }
+
+func TestBlueskyCF127SerializedQueueSurvivesAcknowledgedRestartWithoutPolling(t *testing.T) {
+	// Frozen synthetic RawItem bytes serialized by deployed cf127895fdc29c7c,
+	// not by the code under test. No private production data.
+	const payload = `{"SourceID":"bluesky-discovery:did:plc:cf127-fixture:queued-post","Source":"bluesky-discovery","Title":"CVE-2026-111497 reproduced heap memory disclosure","URL":"https://bsky.app/profile/did:plc:cf127-fixture/post/queued-post","Content":"CVE-2026-111497 reproduced heap memory disclosure","PublishedAt":"2026-11-15T09:00:00Z","UpdatedAt":"0001-01-01T00:00:00Z","Revision":"030ebf353fa9e51a0f12af6c00d4c2acc77afb1f01b9561107b7a0d702ad35a4","Metadata":null,"Discovery":{"Platform":"bluesky","OriginalURL":"https://bsky.app/profile/did:plc:cf127-fixture/post/queued-post","DiscoveryURL":"https://bsky.app/profile/did:plc:cf127-fixture/post/queued-post","Author":"did:plc:cf127-fixture","ParentURLs":null,"QuoteURLs":null,"ContextComplete":true},"SigmaRule":null,"NeedsFullArticle":false,"BodyCVEsAreSubjects":false,"CorroborationOnly":false,"Enriched":false}`
+	const source = "bluesky-discovery"
+	const sourceID = "bluesky-discovery:did:plc:cf127-fixture:queued-post"
+	const revision = "030ebf353fa9e51a0f12af6c00d4c2acc77afb1f01b9561107b7a0d702ad35a4"
+	const cursor = "1794736800000000"
+	watermark := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	path := t.TempDir() + "/deployed-queue.db"
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	// Seed the deployed layout directly; the new public ingestion API must
+	// not construct or reserialize the compatibility fixture.
+	if _, err := raw.Exec(`CREATE TABLE ingestion_candidates (
+ source_id TEXT NOT NULL, revision TEXT NOT NULL, source TEXT NOT NULL,
+ payload TEXT NOT NULL, payload_bytes INTEGER NOT NULL, queued_at TEXT NOT NULL,
+ delivered_at TEXT NOT NULL DEFAULT '', PRIMARY KEY(source_id,revision));
+ CREATE TABLE scraper_state (source TEXT PRIMARY KEY, last_poll DATETIME NOT NULL, cursor TEXT);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO ingestion_candidates(source_id,revision,source,payload,payload_bytes,queued_at) VALUES(?,?,?,?,?,?)`, sourceID, revision, source, payload, len(payload), "2026-11-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO scraper_state(source,last_poll,cursor) VALUES(?,?,?)`, source, watermark, cursor); err != nil {
+		t.Fatal(err)
+	}
+
+	for restart := 0; restart < 4; restart++ {
+		func() {
+			db, err := storage.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			// No scrapers are registered: delivery has no replay/network path.
+			runner := NewRunner(db, testLogger(), 24*time.Hour)
+			items, err := runner.PollAll(context.Background())
+			if err != nil {
+				t.Fatalf("restart %d: drain serialized queue: %v", restart, err)
+			}
+			wantCount := 1
+			if restart >= 2 {
+				wantCount = 0
+			}
+			if len(items) != wantCount {
+				t.Fatalf("restart %d: delivered %d candidates, want %d", restart, len(items), wantCount)
+			}
+			state, err := db.GetScraperState(source)
+			if err != nil || state == nil || state.Source != source || state.Cursor != cursor || !state.LastPoll.Equal(watermark) {
+				t.Fatalf("restart %d changed deployed source cursor: state=%+v err=%v", restart, state, err)
+			}
+			var queued int
+			if err := raw.QueryRow(`SELECT COUNT(*) FROM ingestion_candidates`).Scan(&queued); err != nil || queued != wantCount {
+				t.Fatalf("restart %d: queued=%d want=%d err=%v", restart, queued, wantCount, err)
+			}
+			seen, err := db.HasSeenRevision(sourceID, revision)
+			if err != nil || seen != (restart >= 2) {
+				t.Fatalf("restart %d acknowledged delivery before processing or lost acknowledgement: seen=%v err=%v", restart, seen, err)
+			}
+			if restart >= 2 {
+				return
+			}
+			item := items[0]
+			serialized, err := json.Marshal(item)
+			if err != nil || string(serialized) != payload || item.Source != source || item.SourceID != sourceID || item.Revision != revision {
+				t.Fatalf("restart %d changed frozen payload/source/revision: err=%v", restart, err)
+			}
+			var storedPayload string
+			if err := raw.QueryRow(`SELECT payload FROM ingestion_candidates WHERE source_id=? AND revision=?`, sourceID, revision).Scan(&storedPayload); err != nil || storedPayload != payload {
+				t.Fatalf("restart %d modified unresolved payload: %v", restart, err)
+			}
+			if restart == 1 {
+				if err := db.MarkSeenRevision(item.SourceID, item.Source, item.Title, item.Revision); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}()
+	}
+}

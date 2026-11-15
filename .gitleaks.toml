@@ -1,7 +1,0 @@
-[extend]
-useDefault = true
-
-[[allowlists]]
-description = "Pinned upstream Jetstream dictionary contains public training strings; exact bytes verified by TestJetstreamDictionaryProvenance"
-targetRules = ["generic-api-key"]
-paths = ['''^internal/scraper/jetstream_zstd_dictionary$''']

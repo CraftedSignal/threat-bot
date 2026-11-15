@@ -21,6 +21,8 @@ try:
     with tempfile.TemporaryDirectory(prefix="threat-bot-context-") as temp:
         probe = Path(temp) / "Dockerfile"
         checks = " && ".join(f"test ! -e /context/{name}" for name in [*names, ".git", ".superpowers", ".tools"])
+        checks += " && test -s /context/internal/scraper/jetstream_zstd_dictionary.gz"
+        checks += " && test -s /context/internal/scraper/jetstream_zstd_dictionary.LICENSE"
         probe.write_text(f"FROM {base}\nCOPY . /context/\nRUN test -s /context/go.mod && test -d /context/cmd/threat-bot && {checks}\n")
         subprocess.run([engine, "build", "--platform", "linux/amd64", "--no-cache", "-f", str(probe), str(root)], check=True)
 finally:

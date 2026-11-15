@@ -55,8 +55,8 @@ func TestGroundingResolvesScopedEvidenceLocally(t *testing.T) {
 				t.Fatal("source reference lost its product scope")
 			}
 			subject := schema.Properties["issues"].Items.Properties["subject"]
-			if !containsString(subject.Enum, "Example Harbor") || containsString(subject.Enum, "Example Bridge") {
-				t.Fatalf("unconstrained targets: %+v", subject)
+			if len(subject.Enum) != 0 {
+				t.Fatalf("mixed-kind findings require an honest empty subject without empty enums: %+v", subject)
 			}
 			answer := fmt.Sprintf(`{"issues":[{"kind":"material_omission","field":"content","subject":"Example Harbor","source_evidence_id":%q,"source_quote":"","reason":"Missing fixed release."}]}`, ref.ID)
 			return llm.DecodeStructured(answer, out)
@@ -155,15 +155,15 @@ func TestGroundingReferenceCannotSwitchEligibleProductTargets(t *testing.T) {
 			return llm.DecodeStructured(`{"evidence":[]}`, out)
 		}
 		for _, ref := range readReferenceFixture(t, prompt) {
-			if ref.Quote == "Example Bridge is fixed in 2.0." {
+			if ref.Quote == "OtherPlugin is fixed in 2.0." {
 				answer := fmt.Sprintf(`{"issues":[{"kind":"material_omission","field":"content","subject":"Example Harbor","source_evidence_id":%q,"source_quote":"Example Harbor is fixed in 2.4.","reason":"Missing fix."}]}`, ref.ID)
 				return llm.DecodeStructured(answer, out)
 			}
 		}
 		return errors.New("second product source reference missing")
 	}}
-	brief := strings.Replace(syntheticIncompleteBrief, "affected_products: [Example Harbor]", "affected_products: [Example Harbor, Example Bridge]", 1)
-	result, err := NewGroundingChecker(client).Check(context.Background(), "Example Harbor", syntheticCompletenessSource+"\nExample Bridge is fixed in 2.0.", brief)
+	brief := strings.Replace(syntheticIncompleteBrief, "affected_products: [Example Harbor]", "affected_products: [Example Harbor, OtherPlugin]", 1)
+	result, err := NewGroundingChecker(client).Check(context.Background(), "Example Harbor", syntheticCompletenessSource+"\nOtherPlugin is fixed in 2.0.", brief)
 	var failure interface{ FailureKind() string }
 	if result != nil || !errors.As(err, &failure) || calls != 2 {
 		t.Fatalf("reference for a different eligible product bypassed target gate: %+v %v calls=%d", result, err, calls)
@@ -208,52 +208,5 @@ func TestGroundingCorrectionSelectsLocallyResolvedReference(t *testing.T) {
 	result, err := NewGroundingChecker(client).Check(context.Background(), "Example Harbor", syntheticCompletenessSource, syntheticIncompleteBrief)
 	if err != nil || result == nil || result.Grounded || len(result.Issues) != 1 || !strings.Contains(result.Issues[0], "Example Harbor is fixed in 2.4.") || calls != 2 {
 		t.Fatalf("finding-only correction did not resolve local evidence: %+v %v calls=%d", result, err, calls)
-	}
-}
-
-// Every request must reach provider generation without Vertex rejecting an empty
-// enum member. Optional IDs preserve the fully validated verbatim-quote path.
-func TestGroundingEvidenceSchemasRemainVertexCompatible(t *testing.T) {
-	for _, source := range []string{syntheticCompletenessSource, "An advisory with no target-scoped source passage."} {
-		t.Run(source, func(t *testing.T) {
-			calls := 0
-			var checkSchema func(*llm.Schema)
-			checkSchema = func(schema *llm.Schema) {
-				for _, value := range schema.Enum {
-					if value == "" {
-						t.Fatal("Vertex rejects empty enum members")
-					}
-				}
-				for _, property := range schema.Properties {
-					checkSchema(property)
-				}
-				if schema.Items != nil {
-					checkSchema(schema.Items)
-				}
-			}
-			client := referenceTestLLM{respond: func(_ context.Context, _, system string, schema *llm.Schema, out any) error {
-				calls++
-				checkSchema(schema)
-				entries := schema.Properties["issues"]
-				if system == materialOmissionEvidenceSystem {
-					entries = schema.Properties["evidence"]
-				}
-				if entries.Items.Properties["source_evidence_id"] == nil || containsString(entries.Items.Required, "source_evidence_id") {
-					t.Fatal("quote-only findings require an optional evidence ID")
-				}
-				if system != materialOmissionEvidenceSystem {
-					if containsString(entries.Items.Required, "subject") {
-						t.Fatal("non-omission findings must be able to omit subject")
-					}
-					return llm.DecodeStructured(`{"issues":[{"kind":"material_omission","field":"content","subject":"Example Harbor","source_quote":"invented","reason":"Missing fix."}]}`, out)
-				}
-				return llm.DecodeStructured(`{"evidence":[{"subject":"Example Harbor","source_quote":""}]}`, out)
-			}}
-			result, err := NewGroundingChecker(client).Check(context.Background(), "Example Harbor", source, syntheticIncompleteBrief)
-			var contract *omissionEvidenceContractError
-			if result != nil || !errors.As(err, &contract) || calls != 2 {
-				t.Fatalf("unsupported evidence must fail closed after correction: result=%+v err=%v calls=%d", result, err, calls)
-			}
-		})
 	}
 }

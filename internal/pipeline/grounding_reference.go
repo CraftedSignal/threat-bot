@@ -79,17 +79,6 @@ func omissionEvidencePrompt(refs []scopedGroundingEvidence) string {
 	return "\n\n## Scoped source evidence (JSON)\n" + string(data)
 }
 
-func constrainOmissionSchema(schema *llm.Schema, subjects []string, refs []scopedGroundingEvidence) {
-	schema.Properties["subject"].Enum = append([]string{}, subjects...)
-	// IDs are optional so verbatim quotes remain available. Vertex rejects
-	// empty enum members; Go validation rejects unknown or unbound IDs.
-	ids := []string{}
-	for _, ref := range refs {
-		ids = append(ids, ref.ID)
-	}
-	schema.Properties["source_evidence_id"].Enum = ids
-}
-
 func resolveMaterialOmission(issue groundingIssue, source, brief string, refs []scopedGroundingEvidence) (groundingIssue, error) {
 	if issue.SourceEvidenceID != "" {
 		found := false

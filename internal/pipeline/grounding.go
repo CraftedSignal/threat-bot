@@ -63,8 +63,8 @@ type groundingIssue struct {
 	Field            string `json:"field"`
 	BriefQuote       string `json:"brief_quote"`
 	Reason           string `json:"reason"`
-	Subject          string `json:"subject,omitempty" desc:"For material_omission, copy one eligible completeness subject exactly. Omit for other kinds."`
-	SourceEvidenceID string `json:"source_evidence_id,omitempty" desc:"For material_omission select a scoped source evidence ID whose subjects include the exact selected subject; its quote is resolved locally. Omit for other kinds."`
+	Subject          string `json:"subject" desc:"For material_omission, copy one eligible completeness subject exactly. Empty for other kinds."`
+	SourceEvidenceID string `json:"source_evidence_id" desc:"For material_omission select a scoped source evidence ID whose subjects include the exact selected subject; its quote is resolved locally. Empty for other kinds."`
 	SourceQuote      string `json:"source_quote" desc:"For material_omission, a verbatim source passage including its subject and missing fact, or the complete text of a CVE/product-scoped primary evidence field. Empty for other kinds."`
 }
 
@@ -127,7 +127,7 @@ Also check material completeness of this entire brief. If an explicit source fac
 
 Use an exact subject from the eligible completeness subjects supplied with the brief. Prefer source_evidence_id from the scoped source evidence catalogue, selecting only a reference whose subjects include that subject; leave source_quote empty when selecting an ID because the server resolves its text locally. Never invent IDs or use an unrelated target reference. For structured primary CVE evidence, source_quote may instead be the complete decoded text field of one fact whose CVE and product match the brief; its explicit record scope supplies the identity. Do not splice fields or quote a detached version fragment. A record-wide fact without a product must name the brief's product in its text.
 
-Missing minor background, credits, or incidental details can be kind "omission" and are advisory. Unspecified source facts are gaps, not facts to invent: do not demand a fixed release, role, impact, exploit chain, detector or IOC that the supplied source does not establish. Omit subject/source_evidence_id and use empty source_quote for unsupported claims and minor omissions.
+Missing minor background, credits, or incidental details can be kind "omission" and are advisory. Unspecified source facts are gaps, not facts to invent: do not demand a fixed release, role, impact, exploit chain, detector or IOC that the supplied source does not establish. Use empty subject/source_quote for unsupported claims and minor omissions.
 
 Return an empty issues array only when statements are supported and no material source fact is omitted.`
 
@@ -258,7 +258,8 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 		system = groundingSystem
 		schema = llm.MustSchemaOf[groundingReport]()
 		refs = scopedOmissionEvidence(source, briefYAML)
-		constrainOmissionSchema(schema.Properties["issues"].Items, materialOmissionSubjects(briefYAML), refs)
+		// Mixed-kind findings need honest empty subjects and reference IDs.
+		// Validate material targets and references locally, without empty enums.
 		subjects, _ := json.Marshal(materialOmissionSubjects(briefYAML))
 		prompt += "\n\nEligible completeness subjects (copy exactly for material_omission):\n" + string(subjects)
 		prompt += omissionEvidencePrompt(refs)

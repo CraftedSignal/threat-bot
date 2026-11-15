@@ -23,7 +23,11 @@ base = {
     "manifest": (404, {"errors": [{"code": "MANIFEST_UNKNOWN"}]}),
 }
 correct_package = {"name": "threat-bot", "package_type": "container", "repository": {"id": 123}}
-cases = [("first release", {}, True), ("new version in owned package", {"package": (200, correct_package)}, True)]
+cases = [
+    ("first release", {}, True),
+    ("first release with package-specific 404", {"package": (404, {"message": "Package not found."})}, True),
+    ("new version in owned package", {"package": (200, correct_package)}, True),
+]
 for stage in ("repository", "release", "package", "token", "manifest"):
     for status in (401, 403, 429, 500, 302):
         cases.append((stage + " HTTP " + str(status), {stage: (status, {"message": secret})}, False))
@@ -41,6 +45,7 @@ cases.extend([
     ("registry token not found", {"token": (404, {"message": "Not Found"})}, False),
     ("unconfirmed manifest absence", {"manifest": (404, {"message": "Not Found"})}, False),
     ("unconfirmed release absence", {"release": (404, {"message": secret})}, False),
+    ("package response cannot confirm missing release", {"release": (404, {"message": "Package not found."})}, False),
     ("unconfirmed package absence", {"package": (404, {"message": secret})}, False),
 ])
 

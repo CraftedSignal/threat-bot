@@ -249,7 +249,7 @@ func TestPipelineStopsBeforePublishWhenRuleRepairIsCanceledByShutdown(t *testing
 	client := shutdownStageLLM{
 		generate: func(callCtx context.Context, _, system string) (string, error) {
 			switch system {
-			case briefSystemPrompt:
+			case briefSystemPrompt, compactAdvisorySystemPrompt:
 				return repairBrief, nil
 			case ruleRepairSystemPrompt:
 				cancel()

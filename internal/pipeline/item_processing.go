@@ -76,6 +76,17 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				targetMatches = targetErr == nil && targetKey == state.MergeTargetKey
 			}
 			if p.processingKey(item) == state.EvidenceKey && targetMatches {
+				if state.GroundingFailure != nil {
+					if err := p.refreshHeldGroundingEvidence(ctx, state); err != nil {
+						return err
+					}
+					if !p.groundingFailureHeld(state) {
+						if err := p.db.ClearGroundingAttempts(item.SourceID); err != nil {
+							return err
+						}
+						state.GroundingFailure = nil
+					}
+				}
 				state.Item.Revision = item.Revision
 				state.Item.UpdatedAt = item.UpdatedAt
 				if err := p.saveCandidate(key, state, cp.RetryAt); err != nil {
@@ -87,7 +98,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 					}
 					return nil
 				}
-				if time.Now().Before(cp.RetryAt) {
+				if p.groundingFailureHeld(state) || time.Now().Before(cp.RetryAt) {
 					return nil
 				}
 				workStarted = true

@@ -35,6 +35,7 @@ type CVEMeta struct {
 	CNAFacts       []cnaSourceFact
 	CNAGap         string // Explicit coverage uncertainty, never evidence that no fix exists.
 	CNAChecked     bool
+	CNAUnavailable bool // Supplemental transport failure; cannot invalidate a held checker input.
 	// SourceIdentifier is NVD's sourceIdentifier (the CNA / submitter, e.g.
 	// security@android.com).
 	SourceIdentifier string
@@ -499,6 +500,7 @@ func (v *CVEVerifier) supplementCNA(ctx context.Context, id string) (*CVEMeta, e
 		updated.CNAChecked = true
 		switch {
 		case err != nil:
+			updated.CNAUnavailable = true
 			// This status is included in model evidence. Keep transport details
 			// out of it while retaining explicit uncertainty about coverage.
 			updated.CNAGap = "unknown: CNA affected, remediation and prerequisite coverage unavailable"
@@ -540,7 +542,7 @@ func (v *CVEVerifier) supplementCNA(ctx context.Context, id string) (*CVEMeta, e
 }
 
 func copyCNAEvidence(target, source *CVEMeta) {
-	target.CNAFacts, target.CNAGap, target.CNAChecked = source.CNAFacts, source.CNAGap, source.CNAChecked
+	target.CNAFacts, target.CNAGap, target.CNAChecked, target.CNAUnavailable = source.CNAFacts, source.CNAGap, source.CNAChecked, source.CNAUnavailable
 	if !source.Exists && (source.Verification.Status == "rejected" || source.Verification.Status == "reserved") {
 		target.Exists, target.Verification = false, source.Verification
 	}

@@ -9,6 +9,9 @@ import (
 )
 
 func migrate(db *sql.DB) error {
+	if err := migrateIngestion(db); err != nil {
+		return err
+	}
 	if err := migrateProcessingState(db); err != nil {
 		return err
 	}

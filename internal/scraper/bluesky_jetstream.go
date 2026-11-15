@@ -134,42 +134,66 @@ func jetstreamDialEndpoints(endpoint string) []string {
 
 func (b *BlueskyJetstream) Name() string { return "bluesky-discovery" }
 func (b *BlueskyJetstream) Poll(ctx context.Context, since time.Time) ([]RawItem, error) {
+	window, err := b.pollWindow(ctx, since, nil, false)
+	return window.Items, err
+}
+func (b *BlueskyJetstream) PollWindow(ctx context.Context, since time.Time, eligible func(RawItem) (bool, error)) (streamWindow, error) {
+	return b.pollWindow(ctx, since, eligible, true)
+}
+func (b *BlueskyJetstream) pollWindow(ctx context.Context, since time.Time, eligible func(RawItem) (bool, error), overlap bool) (window streamWindow, err error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return window, err
 	}
 	u, err := url.Parse(b.cfg.Endpoint)
 	if err != nil {
-		return nil, err
+		return window, err
 	}
 	q := u.Query()
 	q.Set("wantedCollections", "app.bsky.feed.post")
+	// Custom endpoints preserve their existing negotiation (including plain
+	// fixtures); documented public endpoints support dictionary Zstd.
+	if len(jetstreamDialEndpoints(b.cfg.Endpoint)) > 1 {
+		q.Set("compress", "true")
+	}
 	if !since.IsZero() {
-		q.Set("cursor", strconv.FormatInt(since.UnixMicro(), 10))
+		cursor := since
+		if overlap {
+			cursor = cursor.Add(-5 * time.Second)
+		}
+		q.Set("cursor", strconv.FormatInt(cursor.UnixMicro(), 10))
 	}
 	u.RawQuery = q.Encode()
 	c, err := dialJetstream(ctx, u.String())
 	if err != nil {
-		return nil, fmt.Errorf("dialing Bluesky Jetstream: %w", err)
+		return window, fmt.Errorf("dialing Bluesky Jetstream: %w", err)
 	}
 	defer func() { _ = c.CloseNow() }()
 	c.SetReadLimit(jetstreamMessageReadLimit)
+	decoder, err := newJetstreamDecoder()
+	if err != nil {
+		return window, err
+	}
+	defer decoder.Close()
 	readCtx, cancel := context.WithTimeout(ctx, b.cfg.ReadWindow)
 	defer cancel()
-	var out []RawItem
+
 	seen := map[string]bool{}
-	for len(out) < b.cfg.CandidateCap {
-		_, data, err := c.Read(readCtx)
+	for len(window.Items) < b.cfg.CandidateCap {
+		messageType, data, err := c.Read(readCtx)
 		if err != nil {
 			if readCtx.Err() != nil {
 				if ctx.Err() != nil {
-					return out, ctx.Err()
+					return window, ctx.Err()
 				}
-				return out, nil
+				return window, nil
 			}
-			if len(out) > 0 {
-				return out, nil
+			return window, fmt.Errorf("reading Bluesky Jetstream: %w", err)
+		}
+		if messageType == websocket.MessageBinary {
+			data, err = decoder.DecodeAll(data, nil)
+			if err != nil {
+				return window, fmt.Errorf("decompressing Jetstream event: %w", err)
 			}
-			return out, fmt.Errorf("reading Bluesky Jetstream: %w", err)
 		}
 		var ev struct {
 			DID    string `json:"did"`
@@ -180,26 +204,53 @@ func (b *BlueskyJetstream) Poll(ctx context.Context, since time.Time) ([]RawItem
 				Record                      struct{ Text, CreatedAt string } `json:"record"`
 			} `json:"commit"`
 		}
-		if json.Unmarshal(data, &ev) != nil || ev.Kind != "commit" || ev.Commit.Operation != "create" || ev.Commit.Collection != "app.bsky.feed.post" || ev.DID == "" || ev.Commit.RKey == "" {
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return window, fmt.Errorf("decoding Jetstream event: %w", err)
+		}
+		if ev.TimeUS <= 0 || ev.TimeUS > time.Now().Add(time.Minute).UnixMicro() {
+			return window, fmt.Errorf("invalid Jetstream event timestamp")
+		}
+		eventTime := time.UnixMicro(ev.TimeUS)
+		// Advance only after this event's candidate has been fully accepted.
+		consumed := func() {
+			if eventTime.After(window.Watermark) {
+				window.Watermark = eventTime
+			}
+		}
+		if ev.Kind != "commit" || ev.Commit.Operation != "create" || ev.Commit.Collection != "app.bsky.feed.post" || ev.DID == "" || ev.Commit.RKey == "" {
+			consumed()
 			continue
 		}
 		id := b.Name() + ":" + ev.DID + ":" + ev.Commit.RKey
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
 		published, _ := time.Parse(time.RFC3339, ev.Commit.Record.CreatedAt)
 		if published.IsZero() && ev.TimeUS > 0 {
 			published = time.UnixMicro(ev.TimeUS)
 		}
-		if published.Before(since) {
+		if eventTime.Before(since) && !overlap {
+			consumed()
 			continue
 		}
 		postURL := "https://bsky.app/profile/" + url.PathEscape(ev.DID) + "/post/" + url.PathEscape(ev.Commit.RKey)
 		item := RawItem{SourceID: id, Source: b.Name(), Title: ev.Commit.Record.Text, URL: postURL, Content: ev.Commit.Record.Text, PublishedAt: published, Discovery: &DiscoveryContext{Platform: "bluesky", OriginalURL: postURL, DiscoveryURL: postURL, Author: ev.DID, ContextComplete: true}}
 		if IsRelevantDiscoveryCandidate(item) {
-			out = append(out, item)
+			if seen[id] {
+				consumed()
+				continue
+			}
+			seen[id] = true
+			item.Revision = item.ContentRevision()
+			accept := true
+			if eligible != nil {
+				accept, err = eligible(item)
+				if err != nil {
+					return window, err
+				}
+			}
+			if accept {
+				window.Items = append(window.Items, item)
+			}
 		}
+		consumed()
 	}
-	return out, nil
+	return window, nil
 }

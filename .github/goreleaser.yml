@@ -21,6 +21,7 @@ archives:
     name_template: "{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
+      - internal/scraper/jetstream_zstd_dictionary.LICENSE
       - config.example.yaml
 
 source:

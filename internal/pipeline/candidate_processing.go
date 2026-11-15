@@ -13,6 +13,15 @@ import (
 )
 
 func (p *Pipeline) processCandidate(ctx context.Context, key string, state processingCandidate) (resultErr error) {
+	if p.groundingFailureHeld(state) {
+		return nil
+	}
+	if state.GroundingFailure != nil {
+		if err := p.db.ClearGroundingAttempts(state.Item.SourceID); err != nil {
+			return err
+		}
+	}
+	state.GroundingFailure = nil
 	item, extraction, preCVEs := state.Item, state.Extraction, state.PreCVEs
 	score, confidence, briefYAML := state.Score, state.Confidence, state.BriefYAML
 	var err error
@@ -124,7 +133,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	// publication errors must preserve the candidate for retry.
 	groundingUnavailable := false
 	defer func() {
-		if !groundingUnavailable || resultErr == nil || ctx.Err() != nil {
+		if !groundingUnavailable || resultErr == nil || ctx.Err() != nil || state.GroundingFailure != nil {
 			return
 		}
 		_ = p.db.RecordProcessingEvent(item.SourceID, key, state.AttemptID, "grounding", "unavailable")
@@ -145,7 +154,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 			return ctxErr
 		}
 		groundingUnavailable = true
-		return fmt.Errorf("grounding check: %w", groundingErr)
+		return p.holdGroundingContractFailure(key, &state, fmt.Errorf("grounding check: %w", groundingErr))
 	}
 	if !groundingResult.Grounded {
 		for _, issue := range groundingResult.Issues {
@@ -190,7 +199,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 				return ctxErr
 			}
 			groundingUnavailable = true
-			return fmt.Errorf("grounding recheck: %w", err)
+			return p.holdGroundingContractFailure(key, &state, fmt.Errorf("grounding recheck: %w", err))
 		}
 		if !groundingResult.Grounded {
 			p.decisions.record(outcomeRejectedUngrounded)

@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/craftedsignal/sigma-parser v0.4.2-0.20261114141751-dc3a797a75a1
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.20.4
 	github.com/mmcdole/gofeed v1.5.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.38.0

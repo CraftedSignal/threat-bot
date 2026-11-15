@@ -8,6 +8,8 @@
 !internal/
 !internal/**/
 !internal/**/*.go
+!internal/scraper/jetstream_zstd_dictionary.gz
+!internal/scraper/jetstream_zstd_dictionary.LICENSE
 !pkg/
 !pkg/**/
 !pkg/**/*.go

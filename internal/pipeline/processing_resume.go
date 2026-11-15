@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 )
 
 // Increment when source interpretation, prompts or validation semantics change.
-const processingPolicyVersion = "evidence-quality-2026-11-15-v3"
+const processingPolicyVersion = "evidence-quality-2026-11-15-v4"
 
 type processingCandidate struct {
 	PolicyKey         string
@@ -30,6 +32,7 @@ type processingCandidate struct {
 	MergeDraftID      string
 	MergeTargetKey    string
 	MergeAttempts     int
+	GroundingFailure  *processingGroundingFailure
 }
 
 func configuredRetryBackoff(d time.Duration) time.Duration {
@@ -43,7 +46,7 @@ func configuredRetryBackoff(d time.Duration) time.Duration {
 }
 func (p *Pipeline) processingKey(item scraper.RawItem) string {
 	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema, groundingReportSchema, claimGroundingReportSchema, llm.MustSchemaOf[materialOmissionEvidenceReport]()})
-	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + materialOmissionEvidenceSystem + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
+	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + compactAdvisorySystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + materialOmissionEvidenceSystem + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(string(schemas)+prompts+processingPolicyVersion+"\x00"+llm.CachePolicyVersion+"\x00"+p.processingPolicy+"\x00"+item.EvidenceRevision())))
 }
 func (p *Pipeline) processingPolicyKey() string { return p.processingKey(scraper.RawItem{}) }
@@ -67,4 +70,63 @@ func (p *Pipeline) saveCandidate(key string, state processingCandidate, retry ti
 }
 func (p *Pipeline) markSeen(item scraper.RawItem) error {
 	return p.db.MarkSeenRevision(item.SourceID, item.Source, item.Title, item.ContentRevision(), item.EvidenceRevision())
+}
+
+// A held provider-output contract failure is not a negative factual verdict.
+// The database already stores this typed record in its opaque checkpoint
+// payload; no shared storage schema or factual-verdict cache is involved.
+type processingGroundingFailure struct {
+	Kind           string
+	RequestDigest  string
+	ContextDigest  string
+	EvidenceDigest string
+	Detail         string
+}
+
+func (p *Pipeline) groundingFailureContextDigest(state processingCandidate) string {
+	data, _ := json.Marshal([]any{state.GroundingFailure.RequestDigest, p.processingPolicyKey(), state.EvidenceKey, state.BriefYAML, p.groundingFailureEvidenceDigest(state)})
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+func (p *Pipeline) groundingFailureEvidenceDigest(state processingCandidate) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(p.groundingEvidence(state.Item, state.BriefYAML))))
+}
+func (p *Pipeline) groundingFailureHeld(state processingCandidate) bool {
+	return state.GroundingFailure != nil && state.GroundingFailure.ContextDigest == p.groundingFailureContextDigest(state)
+}
+func (p *Pipeline) holdGroundingContractFailure(key string, state *processingCandidate, err error) error {
+	var failure *omissionEvidenceContractError
+	if !errors.As(err, &failure) {
+		return err
+	}
+	if state.EvidenceKey == "" {
+		state.EvidenceKey = p.processingKey(state.Item)
+	}
+	state.GroundingFailure = &processingGroundingFailure{Kind: failure.FailureKind(), RequestDigest: failure.RequestDigest(), Detail: failure.Error()}
+	state.GroundingFailure.EvidenceDigest = p.groundingFailureEvidenceDigest(*state)
+	state.GroundingFailure.ContextDigest = p.groundingFailureContextDigest(*state)
+	if saveErr := p.saveCandidate(key, *state, time.Time{}); saveErr != nil {
+		return fmt.Errorf("saving grounding contract hold: %w", errors.Join(err, saveErr))
+	}
+	p.logger.Warn("holding candidate after grounding evidence contract failure", "source_id", state.Item.SourceID, "failure_kind", state.GroundingFailure.Kind, "request_digest", state.GroundingFailure.RequestDigest, "context_digest", state.GroundingFailure.ContextDigest)
+	return err
+}
+
+// The verifier cache is process-local. Rehydrate it before deciding whether
+// primary evidence changed; a cache miss or transport outage is not a new
+// factual input and must not spend another full model check.
+func (p *Pipeline) refreshHeldGroundingEvidence(ctx context.Context, state processingCandidate) error {
+	if p.cveVerifier == nil {
+		return nil
+	}
+	for id := range groundingTargetCVEs(parseBriefFrontmatter(state.BriefYAML)) {
+		_, err := p.cveVerifier.checkCVE(ctx, id)
+		if err != nil {
+			return fmt.Errorf("primary evidence refresh unavailable; retaining grounding contract hold: %w", err)
+		}
+		meta := p.cveVerifier.GetMeta(id)
+		if meta == nil || meta.CNAUnavailable || meta.Verification.Status == "unavailable" {
+			return fmt.Errorf("primary evidence refresh unavailable for %s; retaining grounding contract hold", id)
+		}
+	}
+	return ctx.Err()
 }

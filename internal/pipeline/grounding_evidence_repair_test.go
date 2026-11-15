@@ -18,12 +18,14 @@ type evidenceRepairLLM struct {
 	answer       string
 	err          error
 	calls        int
+	checkSchema  *llm.Schema
 	repairSchema *llm.Schema
 }
 
 func (c *evidenceRepairLLM) GenerateStructured(_ context.Context, _, _ string, schema *llm.Schema, out any) error {
 	c.calls++
 	if c.calls == 1 {
+		c.checkSchema = schema
 		*out.(*groundingReport) = c.report
 		return nil
 	}
@@ -42,6 +44,17 @@ func TestGroundingEvidenceRepairUsesVertexCompatibleSubjectSchema(t *testing.T) 
 	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", syntheticCompletenessSource, syntheticIncompleteBrief)
 	if err != nil || result == nil || result.Grounded || client.repairSchema == nil {
 		t.Fatalf("evidence repair must reach normal blocking validation: result=%+v err=%v", result, err)
+	}
+	// The first response mixes omission and unsupported-claim findings; empty
+	// subjects and IDs must remain representable without empty enum members.
+	initial := client.checkSchema.Properties["issues"].Items
+	for _, field := range []string{"subject", "source_evidence_id"} {
+		if got := initial.Properties[field].Enum; len(got) != 0 {
+			t.Errorf("mixed-kind checker field %s must allow an honest empty value without enums: %q", field, got)
+		}
+	}
+	if got := client.repairSchema.Properties["evidence"].Items.Properties["source_evidence_id"].Enum; len(got) != 0 {
+		t.Errorf("repair reference must allow an empty unsupported value without enums: %q", got)
 	}
 	// Vertex rejects empty enum members with HTTP 400 before generating an
 	// answer. Unsupported evidence can instead leave source_quote empty.
@@ -92,6 +105,8 @@ func TestGroundingEvidenceCorrectionRemainsBoundedAndFailClosed(t *testing.T) {
 		err          error
 	}{
 		{name: "missing correction", answer: `{"evidence":[]}`},
+		{name: "empty reference and quote", answer: `{"evidence":[{"subject":"Example Harbor","source_evidence_id":"","source_quote":""}]}`},
+		{name: "unknown reference", answer: `{"evidence":[{"subject":"Example Harbor","source_evidence_id":"unknown","source_quote":"Example Harbor is fixed in 2.4."}]}`},
 		{name: "missing quote", answer: `{"evidence":[{"subject":"Example Harbor","source_quote":""}]}`},
 		{name: "detached quote", answer: `{"evidence":[{"subject":"Example Harbor","source_quote":"fixed in 2.4"}]}`},
 		{name: "invented quote", answer: `{"evidence":[{"subject":"Example Harbor","source_quote":"Example Harbor is fixed in 9.9."}]}`},

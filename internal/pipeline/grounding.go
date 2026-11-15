@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -58,12 +59,13 @@ const (
 
 // groundingIssue is one finding of the structured grounding check.
 type groundingIssue struct {
-	Kind        string `json:"kind" enum:"unsupported_claim,omission,material_omission"`
-	Field       string `json:"field"`
-	BriefQuote  string `json:"brief_quote"`
-	Reason      string `json:"reason"`
-	Subject     string `json:"subject" desc:"For material_omission, copy one eligible completeness subject exactly. Empty for other kinds."`
-	SourceQuote string `json:"source_quote" desc:"For material_omission, a verbatim source passage including its subject and missing fact, or the complete text of a CVE/product-scoped primary evidence field. Empty for other kinds."`
+	Kind             string `json:"kind" enum:"unsupported_claim,omission,material_omission"`
+	Field            string `json:"field"`
+	BriefQuote       string `json:"brief_quote"`
+	Reason           string `json:"reason"`
+	Subject          string `json:"subject" desc:"For material_omission, copy one eligible completeness subject exactly. Empty for other kinds."`
+	SourceEvidenceID string `json:"source_evidence_id" desc:"For material_omission select a scoped source evidence ID whose subjects include the exact selected subject; its quote is resolved locally. Empty for other kinds."`
+	SourceQuote      string `json:"source_quote" desc:"For material_omission, a verbatim source passage including its subject and missing fact, or the complete text of a CVE/product-scoped primary evidence field. Empty for other kinds."`
 }
 
 // groundingReport is the structured answer of the grounding check.
@@ -123,7 +125,7 @@ const groundingSystem = groundingFactSystem + `
 
 Also check material completeness of this entire brief. If an explicit source fact is missing and changes applicability or the defender response, report kind "material_omission". This includes affected products/version ranges, fixed releases or remediation, authentication/privilege requirements, required dependencies or user interaction, and concrete impact limits. Set subject to the target product name or CVE, source_quote to a VERBATIM source passage containing that subject and the missing fact, and field to the field needing repair. Include identifying context, not a bare version or prerequisite detached from its product. Do not borrow a neighboring product's version, role, fix or CVE. Do not report a fact already covered in another brief field as omitted. Brief_quote may be empty for omissions.
 
-Use an exact subject from the eligible completeness subjects supplied with the brief. For structured primary CVE evidence, source_quote may instead be the complete decoded text field of one fact whose CVE and product match the brief; its explicit record scope supplies the identity. Do not splice fields or quote a detached version fragment. A record-wide fact without a product must name the brief's product in its text.
+Use an exact subject from the eligible completeness subjects supplied with the brief. Prefer source_evidence_id from the scoped source evidence catalogue, selecting only a reference whose subjects include that subject; leave source_quote empty when selecting an ID because the server resolves its text locally. Never invent IDs or use an unrelated target reference. For structured primary CVE evidence, source_quote may instead be the complete decoded text field of one fact whose CVE and product match the brief; its explicit record scope supplies the identity. Do not splice fields or quote a detached version fragment. A record-wide fact without a product must name the brief's product in its text.
 
 Missing minor background, credits, or incidental details can be kind "omission" and are advisory. Unspecified source facts are gaps, not facts to invent: do not demand a fixed release, role, impact, exploit chain, detector or IOC that the supplied source does not establish. Use empty subject/source_quote for unsupported claims and minor omissions.
 
@@ -251,19 +253,31 @@ func (g *GroundingChecker) check(ctx context.Context, sourceTitle, sourceContent
 Assess the supplied YAML according to the system instructions, with verbatim quotes for factual blockers.`, source, briefYAML)
 	system := groundingClaimsSystem
 	schema := claimGroundingReportSchema
+	var refs []scopedGroundingEvidence
 	if completeness {
 		system = groundingSystem
-		schema = groundingReportSchema
+		schema = llm.MustSchemaOf[groundingReport]()
+		refs = scopedOmissionEvidence(source, briefYAML)
+		// Mixed-kind findings need honest empty subjects and reference IDs.
+		// Validate material targets and references locally, without empty enums.
 		subjects, _ := json.Marshal(materialOmissionSubjects(briefYAML))
 		prompt += "\n\nEligible completeness subjects (copy exactly for material_omission):\n" + string(subjects)
+		prompt += omissionEvidencePrompt(refs)
 	}
 
 	var report groundingReport
 	if err := g.llm.GenerateStructured(ctx, prompt, system, schema, &report); err != nil {
 		return nil, fmt.Errorf("grounding check LLM call: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if completeness {
-		if err := g.repairMaterialOmissionEvidence(ctx, source, briefYAML, &report); err != nil {
+		if err := g.repairMaterialOmissionEvidence(ctx, source, briefYAML, &report, refs); err != nil {
+			var contract *omissionEvidenceContractError
+			if errors.As(err, &contract) {
+				contract.Digest = groundingRequestDigest(sourceTitle, sourceContent, briefYAML, prompt, system, schema)
+			}
 			return nil, fmt.Errorf("grounding completeness evidence: %w", err)
 		}
 	}

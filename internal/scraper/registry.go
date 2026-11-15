@@ -3,6 +3,7 @@ package scraper
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,9 @@ type runnerStore interface {
 	HasSeenRevision(string, string) (bool, error)
 	MarkSeenRevision(string, string, string, string, ...string) error
 	SaveScraperState(string, time.Time, string) error
+	HasIngestionCandidate(string, string) (bool, error)
+	CommitIngestion(string, time.Time, []storage.IngestionCandidate) error
+	NextIngestionCandidates(int) ([]storage.IngestionCandidate, error)
 }
 
 // Runner manages and polls all registered scrapers.
@@ -192,7 +196,35 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 			}
 
 			r.logger.Info("polling source", "source", s.Name(), "since", since)
-			items, err := s.Poll(ctx, since)
+			var items []RawItem
+			var window streamWindow
+			stream, durable := s.(streamPoller)
+			if durable {
+				window, err = stream.PollWindow(ctx, since, func(item RawItem) (bool, error) {
+					known, err := r.db.HasIngestionCandidate(item.SourceID, item.Revision)
+					return !known, err
+				})
+				items = window.Items
+				var queued []storage.IngestionCandidate
+				var persistErr error
+				for _, item := range items {
+					payload, e := json.Marshal(item)
+					if e != nil {
+						persistErr = e
+						break
+					}
+					queued = append(queued, storage.IngestionCandidate{SourceID: item.SourceID, Source: item.Source, Revision: item.Revision, Payload: string(payload)})
+				}
+				if persistErr == nil && (len(queued) > 0 || !window.Watermark.IsZero()) {
+					persistErr = r.db.CommitIngestion(s.Name(), window.Watermark, queued)
+				}
+				if persistErr != nil {
+					failState("durable handoff", persistErr)
+					return
+				}
+			} else {
+				items, err = s.Poll(ctx, since)
+			}
 
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
@@ -220,6 +252,14 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 					})
 					mu.Unlock()
 				}
+				return
+			}
+
+			if durable {
+				entry.lastPoll = time.Now()
+				r.recordSuccess(s.Name(), len(items))
+				updateAdaptivePolling(entry, len(items))
+				r.logger.Info("poll complete", "source", s.Name(), "total", len(items), "new", len(items), "stream_watermark", window.Watermark)
 				return
 			}
 
@@ -303,6 +343,18 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 	}
 
 	wg.Wait()
+	queued, queueErr := r.db.NextIngestionCandidates(200)
+	if queueErr != nil {
+		durableErrs = append(durableErrs, fmt.Errorf("loading ingestion queue: %w", queueErr))
+	}
+	for _, candidate := range queued {
+		var item RawItem
+		if err := json.Unmarshal([]byte(candidate.Payload), &item); err != nil {
+			durableErrs = append(durableErrs, fmt.Errorf("decoding queued candidate %s: %w", candidate.SourceID, err))
+			continue
+		}
+		allItems = append(allItems, item)
+	}
 	if err := ctx.Err(); err != nil {
 		return allItems, err
 	}

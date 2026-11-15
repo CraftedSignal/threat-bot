@@ -55,6 +55,7 @@ type Publisher struct {
 	blobRate         int64           // assumed worst-case bytes per second
 	blobDeadlineMax  time.Duration   // cap on a blob download's deadline
 	blobBackoff      []time.Duration // waits between attempts; len+1 attempts
+	blobCache        *blobDiskCache  // optional bounded cache of raw immutable bytes
 	// GitHub API rate-limit state. Updated from every response's
 	// X-RateLimit-* headers; consulted before the next request so
 	// long backfill runs back off automatically when the remaining

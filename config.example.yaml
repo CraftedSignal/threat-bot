@@ -26,6 +26,7 @@ monitoring:
   public_feed_url: ""
 # Optional GitHub publishing: see examples/config.github.yaml and docs/configuration.md.
 # publish:
+#   cache_dir: "" # Optional dedicated writable directory for the bounded raw Git blob cache.
 #   repo_slug: owner/feed-repository
 #   feed_public_key: <64 hexadecimal characters; public compatibility key>
 #   site_url: https://feed.example.org

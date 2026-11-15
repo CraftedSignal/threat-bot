@@ -223,7 +223,7 @@ func (p *Publisher) publishImmutableSTIXArtifact(month string, briefs []BundleBr
 
 func (p *Publisher) publishSTIXCompatibilityAliasFromImmutable(entry stixIndexEntry) error {
 	repoPath := "site/static" + entry.Path
-	data, _, err := p.fetchJSONFile(repoPath)
+	data, blobSHA, err := p.fetchJSONFile(repoPath)
 	if err != nil {
 		return fmt.Errorf("loading immutable STIX artifact %s for compatibility alias: %w", repoPath, err)
 	}
@@ -242,6 +242,22 @@ func (p *Publisher) publishSTIXCompatibilityAliasFromImmutable(entry stixIndexEn
 	aliasRepoPath := "site/static/stix.json"
 	if entry.Month != "" {
 		aliasRepoPath = "site/static/stix/" + entry.Month + ".json"
+	}
+	if p.publication != nil {
+		// Both paths can name the exact same immutable Git blob. Preserve the
+		// alias metadata read/conflict tracking, then reference that validated
+		// identity instead of uploading and downloading the same bytes again.
+		if blobSHA != gitBlobSHA(data) {
+			return fmt.Errorf("immutable STIX artifact %s has an unexpected Git blob SHA", repoPath)
+		}
+		currentSHA, err := p.getFileSHA(aliasRepoPath)
+		if err != nil {
+			return fmt.Errorf("checking STIX compatibility alias %s: %w", aliasRepoPath, err)
+		}
+		if currentSHA != blobSHA {
+			p.publication.staged[aliasRepoPath] = stagedGitFile{sha: blobSHA, size: int64(len(data))}
+		}
+		return nil
 	}
 	message := fmt.Sprintf("chore: refresh STIX compatibility alias %s (%d briefs)", aliasRepoPath, entry.ReportCount)
 	if err := p.publishSTIXCompatibilityAlias(aliasRepoPath, data, message); err != nil {

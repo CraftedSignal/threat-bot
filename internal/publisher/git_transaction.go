@@ -142,6 +142,12 @@ func (p *Publisher) stageGitFile(path string, data []byte) (string, error) {
 	if blob.SHA == "" {
 		return "", fmt.Errorf("GitHub returned an empty blob SHA for %s", path)
 	}
+	if blob.SHA != gitBlobSHA(data) {
+		return "", fmt.Errorf("GitHub returned an unexpected blob SHA for %s", path)
+	}
+	if err := p.cacheDownloadedBlob(blob.SHA, int64(len(data)), data); err != nil {
+		return "", err
+	}
 	p.publication.staged[path] = stagedGitFile{sha: blob.SHA, size: int64(len(data))}
 	return blob.SHA, nil
 }

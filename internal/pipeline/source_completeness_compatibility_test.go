@@ -11,13 +11,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// These keys were obtained by executing the frozen deployed v2 implementation,
+// These keys were obtained by executing the frozen deployed cache/grounding implementation,
 // including its actual JSON schema serialization and complete prompt inputs.
 // Deliberate future policy changes must also define checkpoint migration behavior.
 func TestSourceCompletenessResumesDeployedPolicyCheckpoint(t *testing.T) {
-	const policyFingerprint = "6de0d89e534eda20c3c973211105c6e0b041c349337fa67b80e7f808e4111980"
-	const evidenceFingerprint = "ee7d19503cfde672a3ae1de5004b2507a6d10ceb617bae4f0a07590dc923adb0"
-	const inputFingerprint = "dcdb24657206117d535fe416cc55741ec2b85562c21fea8c9804f2ef4d041865"
+	const policyFingerprint = "05f6fb6c3cd7e1cdd0f3540fb2d5778b2ffdbc94619b659241c38f6afbad7902"
+	const evidenceFingerprint = "e6309f7b88debe35a3d236097e561b84c4dcb0c4bb9bd8a6ba14f70e167dfcfe"
+	const inputFingerprint = "271555e8c3243c8b9d1db5dbba5bd4ef1eefa17381bd84eb7c5b408310cded97"
 	item := scraper.RawItem{SourceID: "fixture:compatibility", Source: "fixture", Title: "Example Harbor advisory", URL: "https://vendor.example/harbor", Content: "Synthetic source material for checkpoint compatibility.", Enriched: true}
 	db := mustOpenTestDB(t)
 	defer db.Close()

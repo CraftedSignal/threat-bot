@@ -46,6 +46,22 @@ func configuredRetryBackoff(d time.Duration) time.Duration {
 	}
 	return d
 }
+
+// Repeated rejection or provider failure should not buy a repair/recheck on
+// every poll. Keep the existing attempt budget, but give subsequent attempts
+// increasing delays. An explicit longer base delay remains authoritative.
+func (p *Pipeline) groundingRetryDelay(attempt int) time.Duration {
+	delay := p.retryBackoff
+	limit := max(delay, 2*time.Hour)
+	for n := 1; n < attempt && delay > 0 && delay < limit; n++ {
+		if delay >= limit/2 {
+			return limit
+		}
+		delay *= 2
+	}
+	return delay
+}
+
 func (p *Pipeline) processingKey(item scraper.RawItem) string {
 	schemas, _ := json.Marshal([]any{briefResponseSchema, revisedBriefSchema, detectionResponseSchema, groundingReportSchema, claimGroundingReportSchema, llm.MustSchemaOf[materialOmissionEvidenceReport]()})
 	prompts := qualitySystemPrompt + qualityPrompt + extractionSystemPrompt + extractionPrompt + briefSystemPrompt + compactAdvisorySystemPrompt + briefPrompt + groundingSystem + groundingClaimsSystem + groundingRepairSystemPrompt + materialOmissionEvidenceSystem + mergeRelevanceSystemPrompt + mergeRelevancePrompt + roundupContentRelevanceSystemPrompt + roundupContentRelevancePrompt + mergeReviewPolicyVersion

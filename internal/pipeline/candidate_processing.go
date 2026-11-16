@@ -129,6 +129,14 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	if attempts > p.maxGroundingAttempts {
 		return p.quarantineUngrounded(item, cleanedYAML, &UngroundedBriefError{Attempts: p.maxGroundingAttempts, Issues: []string{"grounding retry budget exhausted"}})
 	}
+	retryDelay := p.groundingRetryDelay(attempts)
+	if attempts > 1 {
+		// Persist the longer delay before making a provider call so an outage
+		// or process restart cannot fall back to the first-attempt schedule.
+		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
+			return err
+		}
+	}
 	// Only failed model calls count as unavailable grounding. Storage or
 	// publication errors must preserve the candidate for retry.
 	groundingUnavailable := false
@@ -161,7 +169,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 			validationNotes = append(validationNotes, fmt.Sprintf("grounding: %s", issue))
 		}
 		state.Issues = groundingResult.Issues
-		if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
+		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 			return err
 		}
 		repaired, err := p.grounding.Repair(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_repair"}), item.Title, p.groundingEvidence(item, cleanedYAML), cleanedYAML, groundingResult.Issues)
@@ -190,7 +198,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		cleanedYAML = injectAffectedRanges(cleanedYAML, item)
 		cleanedYAML = normalizeDetectionSeverity(cleanedYAML, item)
 		state.BriefYAML, state.Issues = cleanedYAML, nil
-		if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
+		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 			return err
 		}
 		groundingResult, err = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding_recheck"}), item.Title, p.groundingEvidence(item, cleanedYAML), groundingView(cleanedYAML, item.URL))
@@ -204,7 +212,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		if !groundingResult.Grounded {
 			p.decisions.record(outcomeRejectedUngrounded)
 			state.Issues = groundingResult.Issues
-			if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
+			if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 				return err
 			}
 			if err := p.db.RecordProcessingEvent(item.SourceID, key, state.AttemptID, "grounding", "rejected"); err != nil {

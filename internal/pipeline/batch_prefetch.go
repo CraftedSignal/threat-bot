@@ -88,6 +88,9 @@ func (p *Pipeline) batchItemReady(ctx context.Context, item scraper.RawItem) (re
 		if yaml.Unmarshal([]byte(cp.Payload), &state) != nil || state.Item.SourceID != item.SourceID || state.PolicyKey != p.processingPolicyKey() {
 			return false, false, nil
 		}
+		if state.sourceRefreshDeferred(p.processingInputKey(item)) {
+			return true, true, state.Extraction
+		}
 		if state.MergeDraftID == "" && cp.InputKey == p.processingInputKey(item) && time.Now().Before(cp.RetryAt) {
 			return true, true, state.Extraction
 		}

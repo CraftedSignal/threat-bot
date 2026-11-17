@@ -62,13 +62,20 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			return p.resumeDiscoveryClaim(ctx, key, item, attemptID, *cp, state)
 		}
 		if state.PolicyKey == p.processingPolicyKey() {
+			if state.sourceRefreshDeferred(key) {
+				return nil
+			}
 			if state.MergeDraftID == "" && cp.InputKey == key && time.Now().Before(cp.RetryAt) {
 				return nil
 			}
 			refreshed, refreshErr := p.refreshSourceEvidence(ctx, item)
 			if refreshErr != nil {
-				return fmt.Errorf("refresh unavailable; retaining candidate and budget: %w", refreshErr)
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
+				return p.deferSourceRefresh(*cp, state, key, refreshErr)
 			}
+			delete(state.RefreshRetries, key)
 			item = refreshed
 			targetMatches := true
 			if state.MergeDraftID != "" {

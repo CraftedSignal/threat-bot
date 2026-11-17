@@ -35,6 +35,7 @@ type processingCandidate struct {
 	MergeAttempts     int
 	GroundingFailure  *processingGroundingFailure
 	ClaimAssessment   *processingClaimAssessment
+	RefreshRetries    map[string]time.Time
 }
 
 func configuredRetryBackoff(d time.Duration) time.Duration {

@@ -188,6 +188,9 @@ func TestPipelineKeepsChildCancellationAsOperationalError(t *testing.T) {
 	if out := logs.String(); !strings.Contains(out, `"level":"ERROR"`) || !strings.Contains(out, `"msg":"pipeline error"`) {
 		t.Fatalf("child cancellation was not logged as a pipeline error: %s", out)
 	}
+	if out := logs.String(); !strings.Contains(out, `"source":"test-feed"`) || !strings.Contains(out, `"error_class":"canceled"`) {
+		t.Fatalf("operational alert is missing its stable source or failure class: %s", out)
+	}
 	if failed := pipe.Decisions(time.Hour).Failed; failed != 1 {
 		t.Fatalf("child cancellation recorded %d failures, want 1", failed)
 	}

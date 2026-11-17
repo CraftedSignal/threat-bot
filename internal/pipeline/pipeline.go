@@ -440,7 +440,8 @@ func (p *Pipeline) processBatchChunk(ctx context.Context, chunk []scraper.RawIte
 					return ctxErr
 				}
 				p.decisions.record(outcomeFailed)
-				p.logger.Error("pipeline error", "source_id", item.SourceID, "error", err)
+				p.logger.Error("pipeline error", "source_id", item.SourceID,
+					"source", item.Source, "error_class", llm.ErrorStatus(err), "error", err)
 			}
 			if p.autoPublish && p.publisher != nil {
 				*published++

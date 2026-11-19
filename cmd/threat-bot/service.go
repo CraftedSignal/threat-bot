@@ -365,7 +365,9 @@ func runScraper() {
 				logger.Info("shutting down")
 				return
 			}
-			if err == nil {
+			if err != nil {
+				kevReconcile.failed(time.Now())
+			} else {
 				kevReconcile.completed(time.Now(), result, logger)
 				if result.Updated > 0 && pub != nil {
 					if err := pub.Flush(); err != nil {
@@ -421,7 +423,7 @@ const (
 	kevReconcileInterval        = time.Hour
 	kevReconcileBacklogInterval = 10 * time.Minute
 	kevReconcileLimit           = 50
-	kevReconcileNotifyWithin    = 7 * 24 * time.Hour
+	kevReconcileNotifyWithin    = pipeline.KEVNotifyWithin
 )
 
 type kevReconcileSchedule struct {
@@ -430,6 +432,10 @@ type kevReconcileSchedule struct {
 }
 
 func (s *kevReconcileSchedule) due(now time.Time) bool { return !now.Before(s.next) }
+
+// failed retries after the backlog interval, not on the next loop: a failing
+// pass must not rescan every draft and log an error every minute.
+func (s *kevReconcileSchedule) failed(now time.Time) { s.next = now.Add(kevReconcileBacklogInterval) }
 
 // completed schedules the next pass and logs a pass that changed anything or
 // whose count of briefs needing editorial review moved.

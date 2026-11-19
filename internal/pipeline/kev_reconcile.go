@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +13,10 @@ import (
 	"github.com/craftedsignal/threat-bot/internal/storage"
 	"gopkg.in/yaml.v3"
 )
+
+// KEVNotifyWithin bounds which KEV listings are news: only those CISA added
+// this recently notify subscribers. Older ones are a backfill.
+const KEVNotifyWithin = 7 * 24 * time.Hour
 
 // kevCatalogURL is the public evidence page a KEV-derived exploitation state
 // cites, the same URL CVE enrichment writes at publication.
@@ -115,6 +120,13 @@ func (p *Pipeline) ReconcileExploitation(ctx context.Context, opts ExploitationR
 			return result, err
 		}
 		updated, listed, corrected, changed, err := reconcileExploitation(c.briefYAML, catalog)
+		if errors.Is(err, errListingClaimNeedsReview) {
+			result.Held++
+			if p.kevHolds.firstSeen(c.id, c.briefYAML) {
+				p.logger.Info("exploitation reconciliation needs editorial review", "draft_id", c.id, "error", err)
+			}
+			continue
+		}
 		if err != nil || !changed {
 			continue
 		}
@@ -160,7 +172,10 @@ func (p *Pipeline) ReconcileExploitation(ctx context.Context, opts ExploitationR
 		if len(listed) > 0 {
 			sourceID = "cisa-kev:" + listed[0]
 		}
-		if err := p.db.RecordDraftUpdateWithPublication(draft.ID, updated, event, sourceID, publish); err != nil {
+		if err := p.db.RecordDraftUpdateIfUnchanged(draft.ID, c.briefYAML, updated, event, sourceID, publish); err != nil {
+			if errors.Is(err, storage.ErrDraftChanged) {
+				continue // an operator or merge changed it; the next pass re-reads it
+			}
 			return result, err
 		}
 		if publish {
@@ -181,12 +196,19 @@ func (p *Pipeline) ReconcileExploitation(ctx context.Context, opts ExploitationR
 	return result, nil
 }
 
+// errListingClaimNeedsReview reports a brief whose only exploitation evidence
+// is an exploit-code listing while its own text says it is exploited: the
+// text may rest on a source the brief never cited, so a person decides.
+var errListingClaimNeedsReview = errors.New("exploitation evidence is an exploit-code listing but the brief text claims exploitation")
+
 // reconcileExploitation corrects one brief's exploitation state. A
 // confirmed_active state whose only evidence is an exploit-code listing
-// becomes unknown. Every catalog-listed CVE is then flagged as KEV and the
-// brief recorded as exploited with the catalog as evidence; an existing
-// confirmed_active state keeps its own evidence. It returns the listed CVEs,
-// whether a listing-only claim was withdrawn, and whether the brief changed.
+// becomes unknown, unless the brief's text claims exploitation: that needs
+// review (errListingClaimNeedsReview). Every catalog-listed CVE entry is then
+// flagged as KEV and the brief recorded as exploited with the catalog as
+// evidence; an existing confirmed_active state keeps its own evidence. A KEV
+// listing settles a listing-only state without review. It returns the listed
+// CVEs, whether a listing-only claim was withdrawn, and whether it changed.
 func reconcileExploitation(briefYAML string, catalog map[string]string) (out string, listed []string, corrected, changed bool, err error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(briefYAML), &doc); err != nil {
@@ -197,6 +219,9 @@ func reconcileExploitation(briefYAML string, catalog map[string]string) (out str
 	}
 	evidence, _ := asStringMap(doc["exploitation_evidence"])
 	if confirmedEvidence(evidence) && ExploitCodeListingURL(fmt.Sprint(evidence["source_url"])) {
+		if !briefListsKEVCVE(doc, catalog) && briefTextClaimsExploitation(doc) {
+			return briefYAML, nil, false, false, errListingClaimNeedsReview
+		}
 		evidence = map[string]any{"status": "unknown"}
 		doc["exploitation_evidence"] = evidence
 		doc["exploited"] = false
@@ -216,10 +241,14 @@ func reconcileExploitation(briefYAML string, catalog map[string]string) (out str
 			entry = map[string]any{"id": id}
 		}
 		id := strings.ToUpper(strings.TrimSpace(fmt.Sprint(entry["id"])))
-		if _, inKEV := catalog[id]; !inKEV || slices.Contains(listed, id) {
+		if _, inKEV := catalog[id]; !inKEV {
 			continue
 		}
-		listed = append(listed, id)
+		// Every entry is flagged: a brief listing a CVE twice kept the
+		// second entry's kev: false.
+		if !slices.Contains(listed, id) {
+			listed = append(listed, id)
+		}
 		// A bare ID entry becomes structured so it can carry its KEV flag.
 		if kev, _ := entry["kev"].(bool); !isMap || !kev || fmt.Sprint(entry["kev_status"]) != "true" {
 			entry["kev"] = true
@@ -251,6 +280,44 @@ func reconcileExploitation(briefYAML string, catalog map[string]string) (out str
 		return briefYAML, nil, false, false, err
 	}
 	return string(encoded), listed, corrected, true, nil
+}
+
+// briefListsKEVCVE reports whether any CVE entry of the brief is in the catalog.
+func briefListsKEVCVE(doc map[string]any, catalog map[string]string) bool {
+	cves, _ := doc["cves"].([]any)
+	for _, raw := range cves {
+		id, _ := raw.(string)
+		if entry, ok := asStringMap(raw); ok {
+			id = fmt.Sprint(entry["id"])
+		}
+		if _, ok := catalog[strings.ToUpper(strings.TrimSpace(id))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// briefTextClaimsExploitation reports whether the brief's own prose says it is
+// exploited in the wild.
+func briefTextClaimsExploitation(doc map[string]any) bool {
+	var prose []string
+	for _, key := range []string{"title", "summary", "content"} {
+		if s, ok := doc[key].(string); ok {
+			prose = append(prose, s)
+		}
+	}
+	return TextClaimsExploitation(prose...)
+}
+
+// TextClaimsExploitation reports whether prose says something is exploited,
+// or targeted by exploitation attempts, in the wild, unnegated.
+func TextClaimsExploitation(prose ...string) bool {
+	text := strings.Join(prose, "\n")
+	if negatedExploitationRe.MatchString(text) {
+		return false
+	}
+	lower := strings.ToLower(text)
+	return containsAny(lower, activeExploitTerms) || containsAny(lower, exploitAttemptTerms)
 }
 
 func confirmedEvidence(evidence map[string]any) bool {

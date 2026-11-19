@@ -367,6 +367,12 @@ func mergeStringList(fm map[string]any, key string, newVals []string) bool {
 	for _, e := range existing {
 		if s, ok := e.(string); ok {
 			seen[strings.ToLower(strings.TrimSpace(s))] = struct{}{}
+		} else if m, ok := asStringMap(e); ok {
+			// Enriched CVEs are entries with an id. Re-appending one as a bare
+			// string created duplicate CVE entries in published briefs.
+			if id, ok := m["id"].(string); ok {
+				seen[strings.ToLower(strings.TrimSpace(id))] = struct{}{}
+			}
 		}
 	}
 	added := false

@@ -239,7 +239,7 @@ func sourceSignalScore(item scraper.RawItem) int {
 		score += 3
 	}
 	text := strings.ToLower(item.Title + " " + item.Content)
-	if containsAny(text, activeExploitTerms) {
+	if exploitationReported(item, text) {
 		score += 2
 	}
 	if informationalHashRe.MatchString(text) || informationalIPRe.MatchString(text) {

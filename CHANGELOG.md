@@ -16,6 +16,6 @@ This file records user-visible changes. No tagged release is implied by an entry
 - Follow the CISA KEV definition of exploitation: observed exploitation attempts count as `confirmed_active`, exploit-code listings never evidence it, and reports of attempts are routed as updates instead of skipped duplicates.
 - Reconcile published briefs with the CISA KEV catalog hourly (exploited state, per-CVE KEV flags, notifications only for listings from the last week) and withdraw exploitation states whose only evidence is an exploit-code listing.
 - Ground only the claims a merge writes; findings on discarded context no longer hold merges for editorial review.
-- Render CVE record ranges with an unbounded upper limit (`lessThan: "*"`), stop merges from stamping `claim_state: <nil>` on ordinary briefs, and allow GreyNoise exploitation updates to notify subscribers.
+- Render CVE record ranges with an unbounded upper limit (`lessThan: "*"`), stop merges from stamping `claim_state: <nil>` on ordinary briefs, and allow GreyNoise, Rapid7 and the main security newsrooms (SecurityWeek, The Hacker News, BleepingComputer, The Record) to send update notifications; KEV flags caught up for listings older than a week no longer notify.
 
 Before upgrading an existing installation, review the exact release notes, validate configuration, back up SQLite, and test with publishing disabled. Existing feed identities and compatibility fields remain separate from the application's renamed command/module.

@@ -35,3 +35,12 @@ func TestKEVReconcileScheduleDrainsBacklogAndLogsOnlyChanges(t *testing.T) {
 		t.Fatalf("a changed review count was not logged:\n%s", logs.String())
 	}
 }
+
+func TestKEVReconcileScheduleBacksOffAfterFailure(t *testing.T) {
+	var schedule kevReconcileSchedule
+	start := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	schedule.failed(start)
+	if schedule.due(start.Add(time.Minute)) || !schedule.due(start.Add(kevReconcileBacklogInterval)) {
+		t.Fatal("a failed pass must retry after the backlog interval, not every loop")
+	}
+}

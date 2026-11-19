@@ -32,24 +32,20 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 		Techniques:           []string{"T1059.003"},
 		Summary:              "Java4Shell is a critical pre-auth RCE.",
 		VulnClass:            "buffer-overflow",
-		ChainedCVEs:          [][]string{{"CVE-2026-114938", "CVE-2026-1"}},
+		ChainedCVEs:          [][]string{{"CVE-2026-99999", "CVE-2026-1"}},
 		ActiveExploitation:   false,
 		ExploitationEvidence: "researchers expect attacks",
 		ClaimAssessment:      &ClaimAssessment{Claim: "pre-auth RCE", Status: "unverified", Likelihood: "likely"},
 	}
 
-	result, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, map[string]any{}))
+	result, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, map[string]any{}, nil))
 	if err != nil || !result.Grounded {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if len(prompts) != 1 {
 		t.Fatalf("checker calls=%d", len(prompts))
 	}
-	brief := strings.SplitN(prompts[0], "## Generated Brief (YAML)\n", 2)[1]
-	var checked map[string]any
-	if err := yaml.Unmarshal([]byte(strings.SplitN(brief, "\n\nAssess", 2)[0]), &checked); err != nil {
-		t.Fatal(err)
-	}
+	checked := checkedDeltaFields(t, prompts[0])
 	for _, unused := range []string{"platforms", "tactics", "techniques", "summary", "vuln_class", "chained_cves", "active_exploitation", "exploitation_evidence", "claim_assessment", "iocs", "affected_os", "threat_actor"} {
 		if _, ok := checked[unused]; ok {
 			t.Errorf("checker was asked to ground %s, which the merge does not write: %v", unused, checked)
@@ -64,44 +60,45 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 		t.Fatalf("scoping the check mutated the caller's extraction: %+v", extraction)
 	}
 
-	// A source that asserts exploitation keeps that claim under review, and a
-	// live rumour lifecycle keeps its claim assessment.
-	extraction.ActiveExploitation = true
-	item.Content += " Researchers expect attacks soon."
-	prompts = nil
-	if _, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, map[string]any{"claim_state": "reported"})); err != nil {
-		t.Fatal(err)
-	}
-	for _, kept := range []string{"active_exploitation: true", "exploitation_evidence: researchers expect attacks", "claim_assessment:"} {
-		if !strings.Contains(prompts[0], kept) {
-			t.Errorf("checker lost %q:\n%s", kept, prompts[0])
-		}
-	}
-
 	// Nothing to apply means nothing to pay for.
 	prompts = nil
-	result, err = checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, &ExtractionResult{Summary: "context only", Platforms: []string{"linux"}}, map[string]any{}))
+	result, err = checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, &ExtractionResult{Summary: "context only", Platforms: []string{"linux"}}, map[string]any{}, nil))
 	if err != nil || !result.Grounded || len(prompts) != 0 {
 		t.Fatalf("empty delta: result=%+v err=%v calls=%d", result, err, len(prompts))
 	}
+}
+
+func checkedDeltaFields(t *testing.T, prompt string) map[string]any {
+	t.Helper()
+	brief := strings.SplitN(prompt, "## Generated Brief (YAML)\n", 2)[1]
+	var checked map[string]any
+	if err := yaml.Unmarshal([]byte(strings.SplitN(brief, "\n\nAssess", 2)[0]), &checked); err != nil {
+		t.Fatal(err)
+	}
+	return checked
 }
 
 // Provenance granted while checking a lifecycle claim must reach the rumour
 // lifecycle merge, which reads the caller's extraction.
 func TestMergeAppliedDeltaSharesClaimAssessment(t *testing.T) {
 	extraction := &ExtractionResult{ClaimAssessment: &ClaimAssessment{Claim: "x"}}
-	if got := mergeAppliedDelta(scraper.RawItem{}, extraction, map[string]any{"claim_state": "reported"}); got.ClaimAssessment != extraction.ClaimAssessment {
+	if got := mergeAppliedDelta(scraper.RawItem{}, extraction, map[string]any{"claim_state": "reported"}, nil); got.ClaimAssessment != extraction.ClaimAssessment {
 		t.Fatal("claim assessment copied: granted provenance would be lost")
+	}
+	if got := mergeAppliedDelta(scraper.RawItem{}, extraction, map[string]any{}, nil); got.ClaimAssessment != nil {
+		t.Fatal("claim assessment graded for a brief without a lifecycle")
 	}
 }
 
 // A value the target already holds is not written again, so it is not graded.
 // Talos's Java4Shell merge was held for questioning the Oracle vendor the
 // brief already listed, which also blocked everything else the source added.
-func TestMergeDeltaSkipsValuesTheTargetAlreadyHolds(t *testing.T) {
+// The comparison is the merge writers' own: CVE entries stored as maps, bare
+// IDs, case differences and IOC type case all count as held.
+func TestMergeDeltaGradesExactlyWhatTheMergeWrites(t *testing.T) {
 	item := scraper.RawItem{URL: "https://news.example/a", Title: "Java4Shell attacks", Content: "Attackers are exploiting CVE-2026-114938. Storm-1 is behind it."}
 	extraction := &ExtractionResult{
-		CVEs:                 []string{"cve-2026-114938", "CVE-2026-1"},
+		CVEs:                 []string{"cve-2026-114938", "CVE-2026-1", "CVE-2026-2"},
 		AffectedVendors:      []string{" oracle ", "Red Hat"},
 		AffectedProducts:     []string{"OpenJDK"},
 		IOCs:                 []ExtractedIOC{{Type: "ip", Value: "198.51.100.7"}, {Type: "IP", Value: "203.0.113.9"}},
@@ -110,11 +107,12 @@ func TestMergeDeltaSkipsValuesTheTargetAlreadyHolds(t *testing.T) {
 		ExploitationEvidence: "Attackers are exploiting CVE-2026-114938.",
 	}
 	target := map[string]any{
-		"cves":             []any{map[string]any{"id": "CVE-2026-114938"}},
+		"cves":             []any{map[string]any{"id": "CVE-2026-114938", "kev": false}, "CVE-2026-2"},
 		"affected_vendors": []any{"Oracle"},
 		"iocs":             []any{map[string]any{"type": "ip", "value": "203.0.113.9"}},
 	}
-	delta := mergeAppliedDelta(item, extraction, target)
+	incoming := (&Pipeline{}).incomingExploitation(item)
+	delta := mergeAppliedDelta(item, extraction, target, incoming)
 	if strings.Join(delta.CVEs, ",") != "CVE-2026-1" || strings.Join(delta.AffectedVendors, ",") != "Red Hat" || strings.Join(delta.AffectedProducts, ",") != "OpenJDK" {
 		t.Fatalf("held values not dropped: %+v", delta)
 	}
@@ -124,11 +122,65 @@ func TestMergeDeltaSkipsValuesTheTargetAlreadyHolds(t *testing.T) {
 	if delta.ThreatActor != "Storm-1" || !delta.ActiveExploitation {
 		t.Fatalf("new actor or exploitation dropped: %+v", delta)
 	}
+	if len(target["cves"].([]any)) != 2 || target["threat_actor"] != nil || target["exploitation_evidence"] != nil {
+		t.Fatalf("computing the delta mutated the target: %v", target)
+	}
 
+	// An actor already set and complete attributed exploitation are not
+	// rewritten. (Confirmed evidence without exploited: true would be: the
+	// merge flips the flag, which is a write and is graded.)
 	target["threat_actor"] = "Storm-2"
-	target["exploitation_evidence"] = map[string]any{"status": "confirmed_active", "source_url": "https://cisa.example/kev"}
-	delta = mergeAppliedDelta(item, extraction, target)
+	target["exploited"] = true
+	target["exploitation_evidence"] = map[string]any{"status": "confirmed_active", "source_url": "https://cisa.example/kev", "observed_at": "2026-11-18T00:00:00Z", "confidence": "high"}
+	delta = mergeAppliedDelta(item, extraction, target, incoming)
 	if delta.ThreatActor != "" || delta.ActiveExploitation || delta.ExploitationEvidence != "" {
 		t.Fatalf("claims the merge cannot write were kept: %+v", delta)
+	}
+}
+
+// A confirmed state resting only on an exploit-code listing yields to a later
+// source, so that source's exploitation claim is written and must be graded.
+// Without this, "Researchers expect attacks" from a news item replaced the
+// listing and published the brief as exploited unchecked.
+func TestMergeDeltaGradesExploitationReplacingListingOnlyEvidence(t *testing.T) {
+	item := scraper.RawItem{URL: "https://news.example/b", Title: "CVE-2024-0582", Content: "Researchers expect attacks on CVE-2024-0582 soon."}
+	extraction := &ExtractionResult{ActiveExploitation: true, ExploitationEvidence: "Researchers expect attacks on CVE-2024-0582 soon."}
+	target := map[string]any{"exploited": true, "exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://sploitus.com/exploit?id=X"}}
+	delta := mergeAppliedDelta(item, extraction, target, (&Pipeline{}).incomingExploitation(item))
+	if !delta.ActiveExploitation || delta.ExploitationEvidence == "" {
+		t.Fatalf("exploitation replacing listing-only evidence was not graded: %+v", delta)
+	}
+	// Filling missing details of an attributed state is a write too.
+	target["exploitation_evidence"] = map[string]any{"status": "confirmed_active", "source_url": "https://cisa.example/kev"}
+	if delta := mergeAppliedDelta(item, extraction, target, (&Pipeline{}).incomingExploitation(item)); !delta.ActiveExploitation {
+		t.Fatalf("evidence details written ungraded: %+v", delta)
+	}
+}
+
+// A chain is the claim that admits a CVE a single-vulnerability brief does not
+// list (cvesAccepted); grading only the admitted CVE let a made-up chain add an
+// unrelated CVE unchecked.
+func TestMergeDeltaGradesTheChainThatAdmitsANewCVE(t *testing.T) {
+	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-1", "CVE-2026-7"}, ChainedCVEs: [][]string{{"CVE-2026-1", "CVE-2026-7"}, {"CVE-2026-1", "CVE-2026-8"}}}
+	target := map[string]any{"cves": []any{map[string]any{"id": "CVE-2026-1"}}}
+	delta := mergeAppliedDelta(scraper.RawItem{}, extraction, target, nil)
+	if strings.Join(delta.CVEs, ",") != "CVE-2026-7" || len(delta.ChainedCVEs) != 1 || strings.Join(delta.ChainedCVEs[0], ",") != "CVE-2026-1,CVE-2026-7" {
+		t.Fatalf("admitting chain not graded: %+v", delta)
+	}
+	if delta := mergeAppliedDelta(scraper.RawItem{}, &ExtractionResult{CVEs: []string{"CVE-2026-1"}, ChainedCVEs: extraction.ChainedCVEs}, target, nil); len(delta.ChainedCVEs) != 0 {
+		t.Fatalf("chains graded although no CVE is added: %+v", delta)
+	}
+}
+
+// mergeStringList skipped CVE entries stored as maps, so a CVE the brief
+// already listed was re-appended as a bare ID and enrichment turned it into a
+// second entry (9 published briefs list a CVE twice).
+func TestMergeStringListTreatsCVEEntriesAsPresent(t *testing.T) {
+	fm := map[string]any{"cves": []any{map[string]any{"id": "CVE-2026-1", "kev": true}}}
+	if mergeStringList(fm, "cves", []string{"cve-2026-1"}) {
+		t.Fatalf("held CVE entry re-appended: %v", fm["cves"])
+	}
+	if !mergeStringList(fm, "cves", []string{"CVE-2026-2"}) || len(fm["cves"].([]any)) != 2 {
+		t.Fatalf("new CVE not appended: %v", fm["cves"])
 	}
 }

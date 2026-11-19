@@ -1055,3 +1055,11 @@ func TestParseBriefYAMLDropsJunkClaimState(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicExploitationEvidenceKeepsListingClaimTheTextMakes(t *testing.T) {
+	evidence := &BundleExploitationEvidence{Status: "confirmed_active", SourceURL: "https://sploitus.com/exploit?id=X"}
+	got := publicExploitationEvidence(BundleBrief{Summary: "CVE-2026-1 is actively exploited in the wild.", ExploitationEvidence: evidence})
+	if got.Status != "confirmed_active" {
+		t.Fatalf("exploitation claimed by the text was withdrawn at publication: %+v", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 
@@ -17,7 +18,7 @@ var sourceCVEPattern = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,}\b`)
 // accepted claims are deliberately not checked against an unrelated new item.
 // Call before any draft mutation or rumour transition. Provenance is issued
 // only after both deterministic identities and semantic grounding pass.
-func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.RawItem, extraction *ExtractionResult) (*GroundingResult, error) {
+func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.RawItem, extraction *ExtractionResult, vendors ...string) (*GroundingResult, error) {
 	if extraction == nil {
 		return &GroundingResult{Grounded: true}, nil
 	}
@@ -60,7 +61,9 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 			if len(strings.Fields(e.Detail)) < 4 || !strings.Contains(source, normalizeForQuote(e.Detail)) {
 				continue
 			}
-			primary := trustedClaimPrimary(item, extraction.AffectedVendors)
+			// A scoped delta omits vendors the target already lists; ownership
+			// of the source is judged against all of them.
+			primary := trustedClaimPrimary(item, append(append([]string(nil), extraction.AffectedVendors...), vendors...))
 			e.Provenance = &ClaimEvidenceProvenance{
 				SourceURL: item.URL, SourceID: item.SourceID, Source: item.Source,
 				EvidenceHash: claimEvidenceHash(*e), TrustedPrimary: primary,
@@ -74,98 +77,110 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 }
 
 // mergeAppliedDelta returns what a merge would change in its target, for
-// CheckMergeDelta. unionIntoDraft never writes summary, platforms, tactics,
-// techniques, vuln_class or chained CVEs, so grounding them only held merges
-// for claims nobody would publish: from 2026-11-17 to 11-19, 3,518 of 4,327
-// merge holds cited nothing else. Values the target already holds are not
-// written again, so a dispute about them (Talos questioning the Oracle vendor
-// a Java4Shell brief already listed) must not block what the source adds.
-// Actor and exploitation use the predicates unionIntoDraft applies, and a
-// claim assessment only feeds a rumour lifecycle the target already has. The
-// claim assessment stays shared with the extraction, so provenance granted
-// by the check still reaches the lifecycle merge.
-func mergeAppliedDelta(item scraper.RawItem, extraction *ExtractionResult, target map[string]any) *ExtractionResult {
-	delta := cloneExtraction(extraction)
-	delta.Tactics, delta.Techniques, delta.Platforms, delta.ChainedCVEs = nil, nil, nil, nil
-	delta.Summary, delta.VulnClass = "", ""
-	delta.CVEs = withoutTargetValues(delta.CVEs, targetCVEIDs(target), strings.ToUpper)
-	for _, field := range []struct {
-		key    string
-		values *[]string
-	}{{"affected_vendors", &delta.AffectedVendors}, {"affected_products", &delta.AffectedProducts}, {"affected_os", &delta.AffectedOS}} {
-		*field.values = withoutTargetValues(*field.values, targetStringSet(target, field.key), strings.ToLower)
+// CheckMergeDelta. It runs unionIntoDraft's own writers on a copy of the
+// target and keeps exactly the claims they would add, so the check cannot
+// drift from the write:
+//   - summary, platforms, tactics, techniques and vuln_class are never
+//     written, so grading them only held merges nobody would publish (from
+//     2026-11-17 to 11-19, 3,518 of 4,327 merge holds cited nothing else);
+//   - values the target already holds are not written again, so a dispute
+//     about them (Talos questioning the Oracle vendor a Java4Shell brief
+//     already listed) cannot block what the source adds;
+//   - a chain is kept when it admits a CVE the target does not list;
+//   - exploitation is kept whenever merging it would change the target's
+//     state, including evidence a listing-only state would yield to;
+//   - a claim assessment only feeds a rumour lifecycle the target has. It
+//     stays shared with the extraction, so provenance granted by the check
+//     still reaches the lifecycle merge.
+//
+// incomingExploitation is the state unionIntoDraft would merge, or nil.
+func mergeAppliedDelta(item scraper.RawItem, extraction *ExtractionResult, target, incomingExploitation map[string]any) *ExtractionResult {
+	if extraction == nil {
+		extraction = &ExtractionResult{}
 	}
-	delta.IOCs = withoutTargetIOCs(delta.IOCs, target)
-	if !mergeAppliesActor(item, extraction) || !yamlValueEmpty(target["threat_actor"]) {
-		delta.ThreatActor = ""
+	probe := map[string]any{"threat_actor": target["threat_actor"], "exploited": target["exploited"]}
+	for _, key := range []string{"affected_vendors", "affected_products", "affected_os", "cves", "iocs"} {
+		if list, ok := target[key].([]any); ok {
+			probe[key] = append([]any(nil), list...)
+		}
 	}
-	evidence, _ := asStringMap(target["exploitation_evidence"])
-	if !mergeAppliesExploitation(item, extraction) || confirmedEvidence(evidence) {
-		delta.ActiveExploitation, delta.ExploitationEvidence = false, ""
+	if evidence, ok := asStringMap(target["exploitation_evidence"]); ok {
+		probe["exploitation_evidence"] = maps.Clone(evidence)
 	}
-	if !rumourLifecycleActive(target) {
-		delta.ClaimAssessment = nil
+	delta := &ExtractionResult{
+		AffectedVendors:  addedByMerge(probe, "affected_vendors", extraction.AffectedVendors),
+		AffectedProducts: addedByMerge(probe, "affected_products", extraction.AffectedProducts),
+		AffectedOS:       addedByMerge(probe, "affected_os", extraction.AffectedOS),
+		CVEs:             addedByMerge(probe, "cves", extraction.CVEs),
+		IOCs:             addedIOCsByMerge(probe, extraction.IOCs),
+	}
+	delta.ChainedCVEs = chainsAdmitting(extraction.ChainedCVEs, delta.CVEs)
+	if mergeAppliesActor(item, extraction) &&
+		mergeScalarIfMissing(probe, map[string]any{"threat_actor": strings.TrimSpace(extraction.ThreatActor)}, "threat_actor") {
+		delta.ThreatActor = extraction.ThreatActor
+	}
+	if incomingExploitation != nil && mergeExploitationState(probe, incomingExploitation) {
+		delta.ActiveExploitation, delta.ExploitationEvidence = true, extraction.ExploitationEvidence
+	}
+	if rumourLifecycleActive(target) {
+		delta.ClaimAssessment = extraction.ClaimAssessment
 	}
 	return delta
 }
 
-// withoutTargetValues drops values the target already holds, compared the
-// way mergeStringList compares them.
-func withoutTargetValues(values []string, present map[string]bool, norm func(string) string) []string {
+// addedByMerge runs mergeStringList on probe and returns the values it
+// appended.
+func addedByMerge(probe map[string]any, key string, values []string) []string {
+	before, _ := probe[key].([]any)
+	if !mergeStringList(probe, key, values) {
+		return nil
+	}
+	after, _ := probe[key].([]any)
 	var out []string
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" && !present[norm(trimmed)] {
-			out = append(out, value)
+	for _, value := range after[len(before):] {
+		if s, ok := value.(string); ok {
+			out = append(out, s)
 		}
 	}
 	return out
 }
 
-func targetStringSet(target map[string]any, key string) map[string]bool {
-	set := map[string]bool{}
-	list, _ := target[key].([]any)
-	for _, entry := range list {
-		if value, ok := entry.(string); ok {
-			set[strings.ToLower(strings.TrimSpace(value))] = true
-		}
+// addedIOCsByMerge runs mergeIOCList on probe and returns the IOCs it
+// appended.
+func addedIOCsByMerge(probe map[string]any, iocs []ExtractedIOC) []ExtractedIOC {
+	before, _ := probe["iocs"].([]any)
+	if !mergeIOCList(probe, iocs) {
+		return nil
 	}
-	return set
-}
-
-// targetCVEIDs returns the CVE IDs a brief lists, as bare IDs or entries.
-func targetCVEIDs(target map[string]any) map[string]bool {
-	set := map[string]bool{}
-	list, _ := target["cves"].([]any)
-	for _, entry := range list {
-		id, _ := entry.(string)
-		if m, ok := asStringMap(entry); ok {
-			id, _ = m["id"].(string)
-		}
-		if id = strings.ToUpper(strings.TrimSpace(id)); id != "" {
-			set[id] = true
-		}
-	}
-	return set
-}
-
-// withoutTargetIOCs drops IOCs the target already holds, keyed the way
-// mergeIOCList keys them.
-func withoutTargetIOCs(iocs []ExtractedIOC, target map[string]any) []ExtractedIOC {
-	key := func(kind, value string) string {
-		return strings.ToLower(strings.TrimSpace(kind)) + "|" + strings.TrimSpace(value)
-	}
-	present := map[string]bool{}
-	list, _ := target["iocs"].([]any)
-	for _, entry := range list {
-		m, _ := entry.(map[string]any)
-		kind, _ := m["type"].(string)
-		value, _ := m["value"].(string)
-		present[key(kind, value)] = true
-	}
+	after, _ := probe["iocs"].([]any)
 	var out []ExtractedIOC
-	for _, ioc := range iocs {
-		if !present[key(ioc.Type, ioc.Value)] {
-			out = append(out, ioc)
+	for _, raw := range after[len(before):] {
+		entry, _ := raw.(map[string]any)
+		kind, _ := entry["type"].(string)
+		value, _ := entry["value"].(string)
+		context, _ := entry["context"].(string)
+		out = append(out, ExtractedIOC{Type: kind, Value: value, Context: context})
+	}
+	return out
+}
+
+// chainsAdmitting returns the chain groups that contain an added CVE: the
+// claim that admits a CVE a single-vulnerability brief did not list.
+func chainsAdmitting(chains [][]string, added []string) [][]string {
+	if len(added) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, id := range added {
+		want[strings.ToUpper(strings.TrimSpace(id))] = true
+	}
+	var out [][]string
+	for _, chain := range chains {
+		for _, id := range chain {
+			if want[strings.ToUpper(strings.TrimSpace(id))] {
+				out = append(out, append([]string(nil), chain...))
+				break
+			}
 		}
 	}
 	return out

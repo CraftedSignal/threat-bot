@@ -72,9 +72,15 @@ var (
 	activeExploitTerms = []string{
 		"actively exploited", "exploitation in the wild", "wild exploitation",
 		"active exploitation", "observed in attacks", "used in attacks",
-		"zero-day", "0-day", "under active attack",
+		"zero-day", "0-day", "under active attack", "in-the-wild exploitation",
+	}
+	// exploitAttemptTerms report exploitation attempts against real systems,
+	// which the CISA KEV definition counts as exploitation. Detection rules use
+	// the same words for what they look for ("Potential CVE-X Exploitation
+	// Attempt"), so they count only for reporting items (exploitationReported).
+	exploitAttemptTerms = []string{
 		"exploitation attempts", "exploitation attempt", "exploit attempts",
-		"attempted exploitation", "exploit-shaped", "in-the-wild exploitation",
+		"attempted exploitation", "exploit-shaped",
 	}
 	severityTerms = []string{
 		"critical", "severity upgrade", "cvss upgraded", "severity escalation",
@@ -669,7 +675,7 @@ func (d *Deduplicator) evaluateCVEOverlap(item scraper.RawItem, cve string, entr
 	if !prevCtx.HasPatch && containsAny(text, patchTerms) {
 		score += 2
 	}
-	if !prevCtx.ActiveExploitation && containsAny(text, activeExploitTerms) {
+	if !prevCtx.ActiveExploitation && exploitationReported(item, text) {
 		score += 2
 	}
 	if containsAny(text, severityTerms) {
@@ -1202,7 +1208,7 @@ func BuildCVEContext(item scraper.RawItem, extraction *ExtractionResult) CVECont
 	ctx := CVEContext{
 		HasExploit:         sourceReportsPublicExploit(item),
 		HasPatch:           containsAny(text, patchTerms),
-		ActiveExploitation: containsAny(text, activeExploitTerms),
+		ActiveExploitation: exploitationReported(item, text),
 		Source:             item.Source,
 	}
 	if extraction != nil {
@@ -1210,6 +1216,27 @@ func BuildCVEContext(item scraper.RawItem, extraction *ExtractionResult) CVECont
 		ctx.Techniques = extraction.Techniques
 	}
 	return ctx
+}
+
+// exploitationReported reports whether an item reports exploitation, or
+// exploitation attempts, in the wild. Detection content states what a rule
+// looks for, not what was observed, so attempt wording counts only outside it;
+// otherwise a Sigma rule would mark the CVE exploited and a later genuine
+// report would no longer route as an update.
+func exploitationReported(item scraper.RawItem, lowerText string) bool {
+	if containsAny(lowerText, activeExploitTerms) {
+		return true
+	}
+	return !isDetectionContent(item) && containsAny(lowerText, exploitAttemptTerms)
+}
+
+// isDetectionContent reports whether an item is a detection rule.
+func isDetectionContent(item scraper.RawItem) bool {
+	switch item.Source {
+	case "sigma-hq", "elastic", "splunk-escu":
+		return true
+	}
+	return item.SigmaRule != nil
 }
 
 // containsAny checks if text contains any of the given terms.

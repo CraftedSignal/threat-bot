@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -339,5 +340,87 @@ func TestMergeExploitationStateReplacesListingOnlyEvidence(t *testing.T) {
 	// Two attributed confirmations keep the first source.
 	if mergeExploitationState(base, map[string]any{"exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://other.example/x"}}) {
 		t.Fatal("equal-rank attributed evidence replaced the first source")
+	}
+}
+
+// A listing-only state is withdrawn silently only when nothing in the brief
+// claims exploitation. If its text says it is exploited, the text may rest on
+// a source the brief never cited, so a person decides; a KEV listing settles
+// it either way.
+func TestReconcileExploitationHoldsListingOnlyClaimsTheTextMakes(t *testing.T) {
+	brief := strings.Replace(kevReconcileBriefYAML, "exploitation_evidence:\n  status: unknown\n",
+		"exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://sploitus.com/exploit?id=X\n", 1)
+	claims := strings.Replace(brief, "CVE-2026-4242 lets unauthenticated attackers run code on WidgetServer.\n", "CVE-2026-4242 is actively exploited in the wild against WidgetServer.\n", 1)
+	if out, _, _, changed, err := reconcileExploitation(claims, map[string]string{"CVE-2099-1": ""}); !errors.Is(err, errListingClaimNeedsReview) || changed || out != claims {
+		t.Fatalf("contradicting text withdrawn silently: changed=%v err=%v", changed, err)
+	}
+	if _, listed, _, changed, err := reconcileExploitation(claims, map[string]string{"CVE-2026-4242": "2026-11-18"}); err != nil || !changed || len(listed) != 1 {
+		t.Fatalf("KEV listing must settle the claim: changed=%v listed=%v err=%v", changed, listed, err)
+	}
+	negated := strings.Replace(brief, "  Upgrade WidgetServer", "  There is no known exploitation in the wild. Upgrade WidgetServer", 1)
+	if _, _, corrected, _, err := reconcileExploitation(negated, map[string]string{"CVE-2099-1": ""}); err != nil || !corrected {
+		t.Fatalf("negated text must not block the withdrawal: corrected=%v err=%v", corrected, err)
+	}
+}
+
+// A brief listing a KEV CVE twice must flag every entry.
+func TestReconcileExploitationFlagsDuplicateCVEEntries(t *testing.T) {
+	brief := strings.Replace(kevReconcileBriefYAML, "  - id: CVE-2026-4243\n", "  - id: CVE-2026-4242\n    kev: false\n  - id: CVE-2026-4243\n", 1)
+	out, listed, _, _, err := reconcileExploitation(brief, map[string]string{"CVE-2026-4242": "2026-11-18"})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("listed=%v err=%v", listed, err)
+	}
+	if strings.Count(out, "kev: true") != 2 || strings.Contains(out, "kev: false\n  - id: CVE-2026-4243") {
+		t.Fatalf("duplicate KEV entry left unflagged:\n%s", out)
+	}
+}
+
+// A CAS write: an operator edit between the scan and the write must survive.
+func TestReconcileExploitationNeverOverwritesConcurrentEdits(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	if err := db.CreateDraft(&storage.Draft{ID: "d", Status: storage.StatusApproved, Source: "nvd", BriefYAML: kevReconcileBriefYAML, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(kevReconcileBriefYAML, "severity: high", "severity: critical", 1)
+	if err := db.RecordDraftUpdateIfUnchanged("d", "not the stored yaml", edited, storage.UpdateEvent{At: time.Now()}, "", false); !errors.Is(err, storage.ErrDraftChanged) {
+		t.Fatalf("stale expectation accepted: %v", err)
+	}
+	if err := db.RecordDraftUpdateIfUnchanged("d", kevReconcileBriefYAML, edited, storage.UpdateEvent{At: time.Now()}, "", false); err != nil {
+		t.Fatalf("matching expectation refused: %v", err)
+	}
+	draft, _ := db.GetDraft("d")
+	if draft.BriefYAML != edited || draft.UpdateCount != 1 {
+		t.Fatalf("conditional update not applied: count=%d", draft.UpdateCount)
+	}
+}
+
+// Catching up an old KEV listing is not news. A merge whose only L3 change is
+// such a flag must not notify; a recent listing or new exploitation must.
+func TestMergeNotifiesOnlyForRecentKEVListings(t *testing.T) {
+	now := time.Now().UTC()
+	p := kevReconcilePipeline(t, nil, kevTestCatalog(t, map[string]string{
+		"CVE-2021-0001": "2021-11-03",
+		"CVE-2026-0002": now.AddDate(0, 0, -1).Format("2006-01-02"),
+	}), "")
+	set := func(ids ...string) map[string]bool {
+		out := map[string]bool{}
+		for _, id := range ids {
+			out[id] = true
+		}
+		return out
+	}
+	pre := briefSignals{kevSet: set(), severity: "high"}
+	if !p.onlyStaleKEVNews(pre, briefSignals{kevSet: set("CVE-2021-0001"), exploited: true, severity: "high"}) {
+		t.Fatal("a 2021 KEV listing caught up by a merge was treated as news")
+	}
+	if p.onlyStaleKEVNews(pre, briefSignals{kevSet: set("CVE-2026-0002"), exploited: true, severity: "high"}) {
+		t.Fatal("a listing from yesterday was suppressed")
+	}
+	if p.onlyStaleKEVNews(pre, briefSignals{kevSet: set(), exploited: true, severity: "high"}) {
+		t.Fatal("exploitation reported by a source was suppressed")
+	}
+	if p.onlyStaleKEVNews(pre, briefSignals{kevSet: set("CVE-2021-0001"), exploited: true, severity: "critical"}) {
+		t.Fatal("an escalation to critical was suppressed")
 	}
 }

@@ -18,6 +18,7 @@ An apparently read-only database command can open/create SQLite or apply schema 
 | `drafts reject ID [--reason TEXT]` | Updates local rejection status. |
 | `drafts republish [--id ID]` | Publishes approved drafts immediately; no preview default. |
 | `drafts republish --since RFC3339 [--exclude-id ID]` | Publishes approved drafts in a time range. |
+| `drafts notify-update --id ID --summary TEXT [--send]` | Previews the update notification an approved draft would send, with its published type, severity and filter fields; `--send` posts it to the configured notifier, which delivers it to every subscription whose filter matches and that opted into updates. Use it to re-send an update whose automatic dispatch was lost. |
 | `digests generate [--hours N] [--publish]` | Renders local approved-brief digest, default 24 hours; optional remote publication. |
 | `sources replay [--dry-run] SOURCE_ITEM_ID...` | Refetches live source items and queues replay unless dry-run; later processing can incur model cost. Use `-` to read IDs from stdin. |
 | `sources reseed [--days N] [--source-id ID] SOURCE` | Clears applicable seen-state and rewinds polling; default 14 days. It mutates state immediately. |

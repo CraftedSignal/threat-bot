@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"flag"
@@ -19,13 +20,18 @@ import (
 
 func handleDrafts(db *storage.DB, pub *publisher.Publisher, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: threat-bot drafts <list|find|show|approve|reject|amend|republish|retire-duplicates>")
+		fmt.Fprintln(os.Stderr, "Usage: threat-bot drafts <list|find|show|approve|reject|amend|republish|retire-duplicates|notify-update>")
 		os.Exit(1)
 	}
 
 	switch args[0] {
 	case "list":
 		handleDraftsList(db, args[1:])
+	case "notify-update":
+		if err := runDraftsNotifyUpdate(context.Background(), db, args[1:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	case "find":
 		if err := runDraftsFind(db, args[1:], os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)

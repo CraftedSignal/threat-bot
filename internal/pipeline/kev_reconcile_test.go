@@ -447,3 +447,54 @@ func TestValidationKeepsListingOnlyClaimTheTextStates(t *testing.T) {
 		t.Fatalf("validation withdrew exploitation the text states: %+v err=%v", brief.ExploitationEvidence, err)
 	}
 }
+
+// Without a publisher projection the payload still maps the draft's internal
+// names (affected_vendors, affected_products, threat_actor) and carries
+// has_poc, which update payloads never sent.
+func TestDispatchBriefMapsDraftFieldsWithoutAProjection(t *testing.T) {
+	draft := "id: b\nslug: s\ntitle: T\nsummary: S\nseverity: high\naffected_vendors: [Acme]\naffected_products: [WidgetServer]\nthreat_actor: Storm-1\nhas_poc: true\nexploited: true\n"
+	b, err := dispatchBriefFromDraftYAML(draft, "exploited:true", "https://feed.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(b.Vendors, ",") != "Acme" || strings.Join(b.Products, ",") != "WidgetServer" || strings.Join(b.Actors, ",") != "Storm-1" || !b.HasPOC || !b.Exploited || b.Severity != "high" {
+		t.Fatalf("draft fields not mapped: %+v", b)
+	}
+}
+
+type projectingPublisher struct{ fields PublicNotificationFields }
+
+func (projectingPublisher) Publish(string) error { return nil }
+func (projectingPublisher) Flush() error         { return nil }
+func (p projectingPublisher) PublicNotificationFields(string) (PublicNotificationFields, error) {
+	return p.fields, nil
+}
+
+// An update notification must take its filterable fields from the published
+// projection: the draft has no public type, so payloads built from it alone
+// matched no subscription that filters on type (every email subscription).
+func TestL3UpdateUsesThePublicProjection(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	if err := db.CreateDraft(&storage.Draft{ID: "d", Status: storage.StatusApproved, Source: "nvd", BriefYAML: kevReconcileBriefYAML, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	var dispatched recordedDispatch
+	server := dispatched.server(t)
+	defer server.Close()
+	p := kevReconcilePipeline(t, db, kevTestCatalog(t, map[string]string{"CVE-2099-1": ""}), server.URL)
+	p.publisher = projectingPublisher{fields: PublicNotificationFields{Slug: "public-slug", Type: "threat", Severities: []string{"critical"},
+		Vendors: []string{"Acme"}, Products: []string{"WidgetServer"}, Actors: []string{"Storm-1"}, Tags: []string{"rce"}, Exploited: true, HasPOC: true}}
+	p.maybeDispatchL3Update(context.Background(), "d", "exploited:true", "greynoise", p.siteURL)
+	dispatched.mu.Lock()
+	defer dispatched.mu.Unlock()
+	if len(dispatched.posts) != 1 {
+		t.Fatalf("dispatches=%d", len(dispatched.posts))
+	}
+	sent := dispatched.posts[0].Briefs[0]
+	if sent.Type != "threat" || sent.Severity != "critical" || strings.Join(sent.Vendors, ",") != "Acme" || strings.Join(sent.Products, ",") != "WidgetServer" ||
+		strings.Join(sent.Actors, ",") != "Storm-1" || !sent.Exploited || !sent.HasPOC || !sent.IsUpdate || sent.UpdateSummary != "exploited:true" ||
+		sent.Slug != "public-slug" || sent.URL != "https://feed.example/briefs/public-slug/" {
+		t.Fatalf("payload does not carry the public projection: %+v", sent)
+	}
+}

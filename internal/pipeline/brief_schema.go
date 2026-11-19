@@ -65,7 +65,7 @@ type revisedBrief struct {
 // rejects in Go (see mergeGroundingRepair).
 type generatedExploitation struct {
 	Status     string `json:"status" enum:"confirmed_active,not_observed,unknown"`
-	SourceURL  string `json:"source_url,omitempty" desc:"URL that shows the observed exploitation; required for confirmed_active"`
+	SourceURL  string `json:"source_url,omitempty" desc:"URL that shows the observed exploitation or exploitation attempts; required for confirmed_active"`
 	ObservedAt string `json:"observed_at,omitempty" format:"date-time" desc:"When the exploitation was observed, RFC3339 (for example 2026-10-02T00:00:00Z). Omit when the source gives no date"`
 	Confidence string `json:"confidence,omitempty" enum:"low,medium,high"`
 }

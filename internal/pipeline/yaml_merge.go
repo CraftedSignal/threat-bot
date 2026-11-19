@@ -174,8 +174,8 @@ func mergeExploitationState(base, incoming map[string]any) bool {
 		current = next
 		changed = true
 	} else {
-		currentRank := exploitationEvidenceRank(fmt.Sprint(current["status"]))
-		nextRank := exploitationEvidenceRank(fmt.Sprint(next["status"]))
+		currentRank := exploitationStateRank(current)
+		nextRank := exploitationStateRank(next)
 		if nextRank > currentRank {
 			base["exploitation_evidence"] = next
 			current = next
@@ -185,13 +185,27 @@ func mergeExploitationState(base, incoming map[string]any) bool {
 			changed = true
 		}
 	}
-	if exploitationEvidenceRank(fmt.Sprint(current["status"])) == exploitationEvidenceRank("confirmed_active") {
+	if exploitationStateRank(current) == exploitationEvidenceRank("confirmed_active") {
 		if exploited, _ := base["exploited"].(bool); !exploited {
 			base["exploited"] = true
 			changed = true
 		}
 	}
 	return changed
+}
+
+// exploitationStateRank ranks an evidence state. A confirmed state whose only
+// evidence is an exploit-code listing ranks with not_observed: attributed
+// confirmation from a later source replaces it (instead of keeping the
+// listing URL), but a not_observed or unknown state does not downgrade it.
+// Such a state survives validation and reconciliation only when the brief's
+// own text states exploitation, which a person must settle.
+func exploitationStateRank(evidence map[string]any) int {
+	rank := exploitationEvidenceRank(fmt.Sprint(evidence["status"]))
+	if rank == exploitationEvidenceRank("confirmed_active") && ExploitCodeListingURL(fmt.Sprint(evidence["source_url"])) {
+		return exploitationEvidenceRank("not_observed")
+	}
+	return rank
 }
 
 func exploitationEvidenceRank(status string) int {
@@ -356,6 +370,12 @@ func mergeStringList(fm map[string]any, key string, newVals []string) bool {
 	for _, e := range existing {
 		if s, ok := e.(string); ok {
 			seen[strings.ToLower(strings.TrimSpace(s))] = struct{}{}
+		} else if m, ok := asStringMap(e); ok {
+			// Enriched CVEs are entries with an id. Re-appending one as a bare
+			// string created duplicate CVE entries in published briefs.
+			if id, ok := m["id"].(string); ok {
+				seen[strings.ToLower(strings.TrimSpace(id))] = struct{}{}
+			}
 		}
 	}
 	added := false

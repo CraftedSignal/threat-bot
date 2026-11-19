@@ -526,6 +526,11 @@ func ParseBriefYAML(yamlStr string) (*BundleBrief, error) {
 	brief.AffectedProducts = pipeline.CleanProductList(brief.AffectedProducts)
 	brief.AffectedOS = pipeline.CleanAffectedList(brief.AffectedOS)
 	brief.CPEs = pipeline.CleanCPEList(brief.CPEs)
+	// Merges once stamped claim_state "<nil>" on ordinary advisories (262
+	// published by 2026-11-19); only a real rumour lifecycle state is public.
+	if !pipeline.KnownClaimState(brief.ClaimState) {
+		brief.ClaimState = ""
+	}
 	return &brief, nil
 }
 

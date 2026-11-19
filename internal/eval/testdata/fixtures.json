@@ -1,6 +1,6 @@
 {
-  "6d4bff72c7c08d659275223e85a701a93e49ffe99f4a895a5dc63cf623b13679": "{\"techniques\":[\"T1053.005\",\"T1059.003\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
-  "a4da67b2d724f07b903a0b435e99fc4701c1fa279160382c68bf251922bf960f": "{\"techniques\":[\"T1003.001\",\"T1078\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
-  "bbf6cabe3f60b9e03cfd18dc4595c595f9e1976e4f5a7d908f0e996c7bee071b": "{\"techniques\":[\"T1057\",\"T1082\",\"T1083\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
-  "e7314caade4097c550d13a3b1ecedd8a8ce0680ed6dd66659bc0a6c6918af2f8": "{\"techniques\":[\"T1059.001\",\"T1566.001\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}"
+  "6c6ce571dc7b7e149ae1865d64fce386c972582b0967c02ae3a9b87e3e11c629": "{\"techniques\":[\"T1003.001\",\"T1078\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
+  "985af81ed1811ba441fd304945f7e200e46317beb4586e3d50316c125f0f7b0d": "{\"techniques\":[\"T1059.001\",\"T1566.001\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
+  "a7ccb438c8e1397df6c53e0d451238bae26934d4a7501f52f2dbabbd08b5fc1e": "{\"techniques\":[\"T1053.005\",\"T1059.003\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}",
+  "ea31023e7e279827e5346929aa97aa2482317949180d6c38784f4a700840d1b3": "{\"techniques\":[\"T1057\",\"T1082\",\"T1083\"],\"summary\":\"Manually authored deterministic response for a fictional exercise.\"}"
 }

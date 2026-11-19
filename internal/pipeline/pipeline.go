@@ -80,9 +80,11 @@ type Pipeline struct {
 	notifierToken          string
 	notifierCooldown       time.Duration
 	siteURL                string
-	decisions              decisionLog
-	socialProvider         scraper.StatusProvider
-	socialThreadDepth      int
+	// kevHolds dedupes notices for exploitation updates the contract refused.
+	kevHolds          exploitationReconcileHolds
+	decisions         decisionLog
+	socialProvider    scraper.StatusProvider
+	socialThreadDepth int
 }
 
 type Config struct {
@@ -237,7 +239,7 @@ func sourceSignalScore(item scraper.RawItem) int {
 		score += 3
 	}
 	text := strings.ToLower(item.Title + " " + item.Content)
-	if containsAny(text, activeExploitTerms) {
+	if exploitationReported(item, text) {
 		score += 2
 	}
 	if informationalHashRe.MatchString(text) || informationalIPRe.MatchString(text) {

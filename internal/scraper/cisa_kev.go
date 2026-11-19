@@ -10,6 +10,9 @@ import (
 
 const cisaKEVURL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 
+// KEVAdmissionStatement is CISA's criterion for listing a CVE in KEV.
+const KEVAdmissionStatement = "CISA adds a CVE to this catalog only when there is reliable evidence that it has been exploited in the wild, which includes attempted as well as successful exploitation."
+
 // CISAKEV scrapes the CISA Known Exploited Vulnerabilities catalog. Every
 // download also refreshes its KEVCatalog, the set CVE enrichment reads.
 type CISAKEV struct {
@@ -71,15 +74,15 @@ func (c *CISAKEV) fetch(ctx context.Context) (*kevCatalog, error) {
 		return nil, fmt.Errorf("decoding KEV catalog: %w", err)
 	}
 
-	ids := make([]string, 0, len(catalog.Vulnerabilities))
+	added := make(map[string]string, len(catalog.Vulnerabilities))
 	for _, vuln := range catalog.Vulnerabilities {
-		ids = append(ids, vuln.CVEID)
+		added[vuln.CVEID] = vuln.DateAdded
 	}
 	if c.catalog != nil {
-		if err := c.catalog.Replace(ids); err != nil {
+		if err := c.catalog.ReplaceEntries(added); err != nil {
 			return nil, fmt.Errorf("CISA KEV catalog %q: %w", catalog.CatalogVersion, err)
 		}
-	} else if len(ids) == 0 {
+	} else if len(added) == 0 {
 		return nil, fmt.Errorf("CISA KEV catalog %q: %w", catalog.CatalogVersion, ErrKEVCatalogEmpty)
 	}
 	return &catalog, nil
@@ -97,9 +100,11 @@ func kevItems(catalog *kevCatalog, since time.Time) []RawItem {
 			continue
 		}
 
+		// The catalog's admission criterion is the exploitation evidence. The
+		// item states it, or no checker could ground exploitation against it.
 		content := fmt.Sprintf(
-			"CVE: %s\nVendor: %s\nProduct: %s\nVulnerability: %s\nDescription: %s\nAction: %s\nDue Date: %s\nRansomware Use: %s\nNotes: %s",
-			vuln.CVEID, vuln.VendorProject, vuln.Product, vuln.VulnerabilityName,
+			"CVE: %s\nCatalog: CISA Known Exploited Vulnerabilities (KEV), added %s. %s\nVendor: %s\nProduct: %s\nVulnerability: %s\nDescription: %s\nAction: %s\nDue Date: %s\nRansomware Use: %s\nNotes: %s",
+			vuln.CVEID, vuln.DateAdded, KEVAdmissionStatement, vuln.VendorProject, vuln.Product, vuln.VulnerabilityName,
 			vuln.ShortDescription, vuln.RequiredAction, vuln.DueDate,
 			vuln.KnownRansomwareCampaignUse, vuln.Notes,
 		)

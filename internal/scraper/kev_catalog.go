@@ -2,6 +2,7 @@ package scraper
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"sync/atomic"
 )
@@ -12,13 +13,14 @@ import (
 var ErrKEVCatalogEmpty = errors.New("CISA KEV catalog lists no CVEs")
 
 // KEVCatalog is the set of CVE IDs in CISA's Known Exploited Vulnerabilities
-// catalog. The CISA KEV source fills it once at startup and again on every
-// poll. Until a download succeeds, membership is unknown, which is not the
-// same as "not listed". A failed download keeps the last good set. A
-// KEVCatalog is safe for concurrent use: refreshes swap in a whole new set,
-// so readers never see a partial one.
+// catalog, each with the date CISA added it. The CISA KEV source fills it once
+// at startup and again on every poll. Until a download succeeds, membership is
+// unknown, which is not the same as "not listed". A failed download keeps the
+// last good set. A KEVCatalog is safe for concurrent use: refreshes swap in a
+// whole new set, so readers never see a partial one.
 type KEVCatalog struct {
-	ids atomic.Pointer[map[string]struct{}]
+	// CVE ID to its catalog dateAdded (YYYY-MM-DD), empty when unknown.
+	entries atomic.Pointer[map[string]string]
 }
 
 // NewKEVCatalog returns a catalog with no set loaded yet.
@@ -31,11 +33,11 @@ func (c *KEVCatalog) Lookup(cveID string) (listed, known bool) {
 	if c == nil {
 		return false, false
 	}
-	ids := c.ids.Load()
-	if ids == nil {
+	entries := c.entries.Load()
+	if entries == nil {
 		return false, false
 	}
-	_, listed = (*ids)[normalizeKEVID(cveID)]
+	_, listed = (*entries)[normalizeKEVID(cveID)]
 	return listed, true
 }
 
@@ -44,25 +46,48 @@ func (c *KEVCatalog) Len() int {
 	if c == nil {
 		return 0
 	}
-	if ids := c.ids.Load(); ids != nil {
-		return len(*ids)
+	if entries := c.entries.Load(); entries != nil {
+		return len(*entries)
 	}
 	return 0
 }
 
-// Replace installs ids as the catalog. A list with no IDs is refused with
-// ErrKEVCatalogEmpty and the current set is kept.
+// Entries returns a copy of the loaded set: each listed CVE ID with the date
+// CISA added it (empty when the download had none). It is nil before the
+// first successful load.
+func (c *KEVCatalog) Entries() map[string]string {
+	if c == nil {
+		return nil
+	}
+	if entries := c.entries.Load(); entries != nil {
+		return maps.Clone(*entries)
+	}
+	return nil
+}
+
+// Replace installs ids as the catalog, without catalog dates. A list with no
+// IDs is refused with ErrKEVCatalogEmpty and the current set is kept.
 func (c *KEVCatalog) Replace(ids []string) error {
-	set := make(map[string]struct{}, len(ids))
+	added := make(map[string]string, len(ids))
 	for _, id := range ids {
+		added[id] = ""
+	}
+	return c.ReplaceEntries(added)
+}
+
+// ReplaceEntries installs the catalog from CVE IDs and their dateAdded. A set
+// with no IDs is refused with ErrKEVCatalogEmpty and the current set is kept.
+func (c *KEVCatalog) ReplaceEntries(added map[string]string) error {
+	set := make(map[string]string, len(added))
+	for id, date := range added {
 		if id = normalizeKEVID(id); id != "" {
-			set[id] = struct{}{}
+			set[id] = strings.TrimSpace(date)
 		}
 	}
 	if len(set) == 0 {
 		return ErrKEVCatalogEmpty
 	}
-	c.ids.Store(&set)
+	c.entries.Store(&set)
 	return nil
 }
 

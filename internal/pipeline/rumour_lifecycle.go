@@ -18,10 +18,11 @@ func mergeRumourLifecycle(frontmatter map[string]any, extraction *ExtractionResu
 	if extraction == nil || extraction.ClaimAssessment == nil {
 		return false
 	}
-	current := ClaimState(strings.ToLower(strings.TrimSpace(fmt.Sprint(frontmatter["claim_state"]))))
-	if current == "" {
+	if !rumourLifecycleActive(frontmatter) {
 		return false
 	}
+	raw, _ := frontmatter["claim_state"].(string)
+	current := ClaimState(strings.ToLower(strings.TrimSpace(raw)))
 	assessment := *extraction.ClaimAssessment
 	var existing []ClaimEvidence
 	if raw, ok := frontmatter["evidence"]; ok {
@@ -131,6 +132,24 @@ const (
 	ClaimRetracted ClaimState = "retracted"
 	ClaimVerified  ClaimState = "verified"
 )
+
+// KnownClaimState reports whether state is a rumour lifecycle state.
+func KnownClaimState(state string) bool {
+	switch ClaimState(strings.ToLower(strings.TrimSpace(state))) {
+	case ClaimReported, ClaimDisputed, ClaimRetracted, ClaimVerified:
+		return true
+	}
+	return false
+}
+
+// rumourLifecycleActive reports whether a brief started a rumour lifecycle.
+// Only those carry a known claim_state. fmt.Sprint of a missing value is
+// "<nil>", which once passed the lifecycle guard and stamped claim_state
+// "<nil>" plus claim evidence on ordinary advisories.
+func rumourLifecycleActive(frontmatter map[string]any) bool {
+	raw, _ := frontmatter["claim_state"].(string)
+	return KnownClaimState(raw)
+}
 
 func IndependentEvidenceLineages(evidence []ClaimEvidence) int {
 	seen := map[string]bool{}

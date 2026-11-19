@@ -957,6 +957,14 @@ func normalizeExploitationEvidence(brief *briefYAML) error {
 	if evidence.Status == "" {
 		evidence.Status = "unknown"
 	}
+	// An exploit-code listing is not exploitation evidence, unless the brief's
+	// own text states exploitation: grounding checks that claim against the
+	// source and the reconciliation flags the listing citation for review.
+	// Withdrawing it silently would contradict the prose.
+	if evidence.Status == "confirmed_active" && ExploitCodeListingURL(evidence.SourceURL) &&
+		!TextClaimsExploitation(brief.Title, brief.Summary, brief.Content) {
+		*evidence = ExploitationEvidence{Status: "unknown"}
+	}
 	switch evidence.Status {
 	case "confirmed_active":
 		prose := strings.Join([]string{brief.Title, brief.Summary, brief.Content}, "\n")
@@ -1000,6 +1008,23 @@ func normalizeExploitationEvidence(brief *briefYAML) error {
 		brief.PrioritySignals = filtered
 	}
 	return nil
+}
+
+// exploitCodeListingHosts publish exploit code and proofs of concept. A
+// listing shows that code exists, never that attackers used it, so it cannot
+// evidence exploitation in the wild (CISA KEV criteria). Briefs citing one were
+// published as exploited with no exploitation claim in their text.
+var exploitCodeListingHosts = map[string]bool{
+	"sploitus.com": true, "exploit-db.com": true, "packetstormsecurity.com": true, "0day.today": true,
+}
+
+// ExploitCodeListingURL reports whether raw points at an exploit-code listing.
+func ExploitCodeListingURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return exploitCodeListingHosts[strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")]
 }
 
 func validSourceURL(raw string) bool {

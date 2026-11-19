@@ -323,7 +323,13 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 		extraction = sanitizeCampaignExtraction(extraction)
 	}
 
-	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, extraction)
+	// Ground exactly what this merge changes, nothing it discards.
+	var probeExploitation map[string]any
+	if mergeAppliesExploitation(item, extraction) {
+		probeExploitation = p.incomingExploitation(item)
+	}
+	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item,
+		mergeAppliedDelta(item, extraction, fm, probeExploitation), yamlStringList(fm["affected_vendors"])...)
 	if err != nil {
 		return fmt.Errorf("%w: incoming claims could not be verified: %w", errMergeRelevanceUnavailable, err)
 	}
@@ -351,32 +357,12 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 	addedIOCs := mergeIOCList(fm, extraction.IOCs)
 	actorChanged := false
 	actor := strings.TrimSpace(extraction.ThreatActor)
-	itemText := strings.ToLower(item.Title + " " + item.Content)
-	if !item.CorroborationOnly && actor != "" && strings.Contains(itemText, strings.ToLower(actor)) {
+	if mergeAppliesActor(item, extraction) {
 		actorChanged = mergeScalarIfMissing(fm, map[string]any{"threat_actor": actor}, "threat_actor")
 	}
 	exploitationChanged := false
-	evidence := strings.TrimSpace(extraction.ExploitationEvidence)
-	if !item.CorroborationOnly && extraction.ActiveExploitation && evidence != "" && validSourceURL(item.URL) &&
-		strings.Contains(itemText, strings.ToLower(evidence)) {
-		observedAt := ""
-		if !item.PublishedAt.IsZero() {
-			observedAt = item.PublishedAt.UTC().Format(time.RFC3339)
-		}
-		confidence := "medium"
-		if sourceConfidence := p.getSourceConfidence(item.Source); sourceConfidence >= 0.85 {
-			confidence = "high"
-		} else if sourceConfidence < 0.5 {
-			confidence = "low"
-		}
-		incomingSignals := map[string]any{
-			"exploited": true,
-			"exploitation_evidence": map[string]any{
-				"status": "confirmed_active", "source_url": item.URL,
-				"observed_at": observedAt, "confidence": confidence,
-			},
-		}
-		exploitationChanged = mergeExploitationState(fm, incomingSignals)
+	if mergeAppliesExploitation(item, extraction) {
+		exploitationChanged = mergeExploitationState(fm, p.incomingExploitation(item))
 	}
 	addedRef := false
 	if sourceReferenceRelevant {
@@ -488,10 +474,56 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 	// L3 events earn an "update" dispatch to opted-in subscribers,
 	// gated by source quality + per-brief cooldown. Best-effort: any
 	// failure logs and falls through, the brief still got updated.
-	if level == "L3" {
+	if level == "L3" && !p.onlyStaleKEVNews(pre, post) {
 		p.maybeDispatchL3Update(ctx, draftID, summary, item.Source, p.siteURL)
 	}
 	return nil
+}
+
+// onlyStaleKEVNews reports whether the only L3 news in a merge is KEV flags
+// for listings older than the notification window: catching an old listing
+// up (the reconciliation backlog) is not news. Exploitation or critical
+// severity reached by other means still notifies.
+func (p *Pipeline) onlyStaleKEVNews(pre, post briefSignals) bool {
+	if p.cveVerifier == nil {
+		return false
+	}
+	if post.exploited && !pre.exploited && len(post.kevSet) == 0 {
+		return false
+	}
+	if post.severity == "critical" && pre.severity != "critical" {
+		return false
+	}
+	catalog := p.cveVerifier.kev.Entries()
+	var added []string
+	for cve := range post.kevSet {
+		if !pre.kevSet[cve] {
+			added = append(added, cve)
+		}
+	}
+	return len(added) > 0 && !kevListedWithin(added, catalog, time.Now().UTC(), KEVNotifyWithin)
+}
+
+// incomingExploitation is the attributed exploitation state a merge of item
+// records. It is built fresh per call because merging may store it.
+func (p *Pipeline) incomingExploitation(item scraper.RawItem) map[string]any {
+	observedAt := ""
+	if !item.PublishedAt.IsZero() {
+		observedAt = item.PublishedAt.UTC().Format(time.RFC3339)
+	}
+	confidence := "medium"
+	if sourceConfidence := p.getSourceConfidence(item.Source); sourceConfidence >= 0.85 {
+		confidence = "high"
+	} else if sourceConfidence < 0.5 {
+		confidence = "low"
+	}
+	return map[string]any{
+		"exploited": true,
+		"exploitation_evidence": map[string]any{
+			"status": "confirmed_active", "source_url": item.URL,
+			"observed_at": observedAt, "confidence": confidence,
+		},
+	}
 }
 
 // referenceURLsForRawItem returns the item's canonical URL plus explicitly

@@ -36,6 +36,18 @@ var l3SourceAllowlist = map[string]struct{}{
 	"crowdstrike":            {},
 	"microsoft-threat-intel": {},
 	"google-project-zero":    {},
+	// First-party sensor telemetry: the primary public source for observed
+	// exploitation attempts, which CISA KEV counts as exploitation.
+	"greynoise": {},
+	"rapid7":    {},
+	// Security newsrooms are where exploitation reports usually break
+	// (Java4Shell's attempts reached the feed through SecurityWeek). A merged
+	// exploitation claim must quote its source and pass grounding, and a
+	// brief turns exploited once, so this adds at most a few updates a week.
+	"securityweek":     {},
+	"the-hacker-news":  {},
+	"bleepingcomputer": {},
+	"therecord":        {},
 }
 
 // dispatchPayload mirrors the feed-notifier /dispatch wire format. We

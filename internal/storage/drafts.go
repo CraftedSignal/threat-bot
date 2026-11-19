@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -399,6 +400,22 @@ func (d *DB) RecordDraftUpdateWithSource(id, briefYAML string, event UpdateEvent
 
 // RecordDraftUpdateWithPublication commits update and publication recovery together.
 func (d *DB) RecordDraftUpdateWithPublication(id, briefYAML string, event UpdateEvent, sourceID string, publish bool) error {
+	return d.recordDraftUpdate(id, nil, briefYAML, event, sourceID, publish)
+}
+
+// ErrDraftChanged reports a conditional update whose draft no longer holds the
+// expected brief YAML; nothing was written.
+var ErrDraftChanged = errors.New("draft changed since it was read")
+
+// RecordDraftUpdateIfUnchanged is RecordDraftUpdateWithPublication for a
+// writer outside the processing loop: it applies only while the draft still
+// holds expectedYAML and returns ErrDraftChanged otherwise, so an operator
+// edit or concurrent merge is never overwritten.
+func (d *DB) RecordDraftUpdateIfUnchanged(id, expectedYAML, briefYAML string, event UpdateEvent, sourceID string, publish bool) error {
+	return d.recordDraftUpdate(id, &expectedYAML, briefYAML, event, sourceID, publish)
+}
+
+func (d *DB) recordDraftUpdate(id string, expectedYAML *string, briefYAML string, event UpdateEvent, sourceID string, publish bool) error {
 	tx, err := d.db.Begin()
 	if err != nil {
 		return err
@@ -427,12 +444,15 @@ func (d *DB) RecordDraftUpdateWithPublication(id, briefYAML string, event Update
 		return fmt.Errorf("updating source IDs for draft %q: %w", id, err)
 	}
 
-	result, err := tx.Exec(
-		`UPDATE drafts
+	query := `UPDATE drafts
 		 SET brief_yaml = ?, correlation = NULL, lastmod = ?, update_count = COALESCE(update_count, 0) + 1, update_log = ?, source_ids = ?
-		 WHERE id = ?`,
-		briefYAML, event.At, string(logJSON), sourceIDsJSON, id,
-	)
+		 WHERE id = ?`
+	args := []any{briefYAML, event.At, string(logJSON), sourceIDsJSON, id}
+	if expectedYAML != nil {
+		query += " AND brief_yaml = ?"
+		args = append(args, *expectedYAML)
+	}
+	result, err := tx.Exec(query, args...)
 	if err != nil {
 		return err
 	}
@@ -441,6 +461,9 @@ func (d *DB) RecordDraftUpdateWithPublication(id, briefYAML string, event Update
 		return err
 	}
 	if changed != 1 {
+		if expectedYAML != nil {
+			return fmt.Errorf("draft %q: %w", id, ErrDraftChanged)
+		}
 		return fmt.Errorf("draft %q not found", id)
 	}
 	if publish {

@@ -31,6 +31,9 @@ func seedMergeReview(t *testing.T, db *storage.DB) scraper.RawItem {
 	return scraper.RawItem{SourceID: "research:patch-review", Source: "cisa-kev", URL: "https://research.example/patch-review", Enriched: true, Title: "Public exploit for WidgetServer CVE-2026-9999", Content: strings.Repeat("The November update patches WidgetServer CVE-2026-9999. SMB and Print Spooler remain persistent risk context. ", 10)}
 }
 
+// mergeReviewPipeline extracts an affected OS the target lacks: merges are
+// grounded only on what they add, and SMB/Print Spooler fall outside the
+// single-product target scope, so without it no check would run.
 func mergeReviewPipeline(t *testing.T, db *storage.DB, checks, extractions *int, checkerErr error) *Pipeline {
 	t.Helper()
 	client := shutdownStageLLM{generate: func(context.Context, string, string) (string, error) {
@@ -39,11 +42,11 @@ func mergeReviewPipeline(t *testing.T, db *storage.DB, checks, extractions *int,
 		switch system {
 		case extractionSystemPrompt:
 			*extractions++
-			*out.(*ExtractionResult) = ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedVendors: []string{"Acme"}, AffectedProducts: []string{"WidgetServer", "SMB", "Print Spooler"}}
+			*out.(*ExtractionResult) = ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedVendors: []string{"Acme"}, AffectedProducts: []string{"WidgetServer", "SMB", "Print Spooler"}, AffectedOS: []string{"Windows Server 2022"}}
 		case qualitySystemPrompt:
 			*out.(*QualityScore) = QualityScore{Credibility: 5, Actionability: 5, Novelty: 5}
 		case mergeRelevanceSystemPrompt:
-			*out.(*mergeRelevanceLLMResponse) = mergeRelevanceLLMResponse{Merge: boolPtr(true), ReferenceRelevant: boolPtr(true), POCRelevant: boolPtr(false), CVEs: []string{"CVE-2026-9999"}, AffectedVendors: []string{"Acme"}, AffectedProducts: []string{"WidgetServer", "SMB", "Print Spooler"}}
+			*out.(*mergeRelevanceLLMResponse) = mergeRelevanceLLMResponse{Merge: boolPtr(true), ReferenceRelevant: boolPtr(true), POCRelevant: boolPtr(false), CVEs: []string{"CVE-2026-9999"}, AffectedVendors: []string{"Acme"}, AffectedProducts: []string{"WidgetServer", "SMB", "Print Spooler"}, AffectedOS: []string{"Windows Server 2022"}}
 		default:
 			*checks++
 			if checkerErr != nil {
@@ -128,7 +131,7 @@ func TestPostExtractionMergeRejectionDoesNotFallThrough(t *testing.T) {
 	before, _ := db.GetDraft("draft-existing")
 	checks, extractions := 0, 0
 	p := mergeReviewPipeline(t, db, &checks, &extractions, nil)
-	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"SMB"}}
+	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"SMB"}, AffectedOS: []string{"Windows Server 2022"}}
 	if !p.handlePostExtractionDedup(context.Background(), item, extraction, nil) {
 		t.Fatal("completed claims rejection fell through to standalone assembly")
 	}
@@ -280,7 +283,7 @@ func TestMergeClaimsRejectionHasDistinctType(t *testing.T) {
 	item := seedMergeReview(t, db)
 	checks, extractions := 0, 0
 	p := mergeReviewPipeline(t, db, &checks, &extractions, nil)
-	err := p.mergeIntoDraft(context.Background(), "draft-existing", &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"SMB"}}, item)
+	err := p.mergeIntoDraft(context.Background(), "draft-existing", &ExtractionResult{CVEs: []string{"CVE-2026-9999"}, AffectedProducts: []string{"SMB"}, AffectedOS: []string{"Windows Server 2022"}}, item)
 	var rejected *MergeClaimsRejectedError
 	if !errors.As(err, &rejected) || errors.Is(err, errMergeRelevanceUnavailable) || errors.Is(err, errMergeNotRelevant) {
 		t.Fatalf("completed claims verdict has wrong classification: %v", err)
@@ -310,8 +313,10 @@ func TestMergeClaimsRejectionKeepsUmbrellaSourceUnseen(t *testing.T) {
 				if !seed.routeToCampaign(context.Background(), first, &ExtractionResult{}) {
 					t.Fatal("fixture did not create a campaign")
 				}
-				item = scraper.RawItem{SourceID: "campaign:held", Source: "research", Title: "ClickFix targets macOS", URL: "https://research.example/held"}
-				extraction = &ExtractionResult{AffectedOS: []string{"macOS"}}
+				// The actor survives relevance filtering and is an applied claim,
+				// so the rejected check runs. An empty delta is never checked.
+				item = scraper.RawItem{SourceID: "campaign:held", Source: "research", Title: "Storm-1234 ClickFix targets macOS", URL: "https://research.example/held"}
+				extraction = &ExtractionResult{AffectedOS: []string{"macOS"}, ThreatActor: "Storm-1234"}
 				indexKey = "campaign|clickfix"
 			}
 			entries, err := db.FindByVendorCycle(indexKey)

@@ -233,6 +233,7 @@ func runScraper() {
 	lastWeeklyDigest := loadDigestTime(db, "weekly", logger)
 	lastEPSSRefresh := time.Time{}
 	lastWatchlistSync := time.Time{}
+	var kevReconcile kevReconcileSchedule
 
 	// Track prior observed health per source so we log only on transitions
 	// (healthy <-> unhealthy) rather than every poll cycle.
@@ -356,6 +357,26 @@ func runScraper() {
 			}
 		}
 
+		// Exploitation reconciliation: mark briefs whose CVEs CISA has since
+		// listed, unmark briefs exploited only on an exploit-code listing.
+		if kevReconcile.due(time.Now()) {
+			result, err := pipe.ReconcileExploitation(ctx, pipeline.ExploitationReconcileOptions{Limit: kevReconcileLimit, NotifyWithin: kevReconcileNotifyWithin})
+			if handleLoopError(ctx, logger, "exploitation reconciliation failed", err) {
+				logger.Info("shutting down")
+				return
+			}
+			if err != nil {
+				kevReconcile.failed(time.Now())
+			} else {
+				kevReconcile.completed(time.Now(), result, logger)
+				if result.Updated > 0 && pub != nil {
+					if err := pub.Flush(); err != nil {
+						logger.Error("publishing exploitation reconciliation failed", "error", err)
+					}
+				}
+			}
+		}
+
 		// Platform watchlist sync: periodically merge platform-managed watchlist entries.
 		if cfg.Watchlist.PlatformSync != nil && cfg.Watchlist.PlatformSync.Enabled &&
 			time.Since(lastWatchlistSync) >= cfg.Watchlist.PlatformSync.Interval {
@@ -392,6 +413,42 @@ func runScraper() {
 		case <-time.After(1 * time.Minute):
 		}
 	}
+}
+
+// Exploitation reconciliation runs hourly, every 10 minutes while a backlog
+// remains.
+// Only listings added within a week notify subscribers; older ones are a
+// backfill, not news.
+const (
+	kevReconcileInterval        = time.Hour
+	kevReconcileBacklogInterval = 10 * time.Minute
+	kevReconcileLimit           = 50
+	kevReconcileNotifyWithin    = pipeline.KEVNotifyWithin
+)
+
+type kevReconcileSchedule struct {
+	next     time.Time
+	lastHeld int
+}
+
+func (s *kevReconcileSchedule) due(now time.Time) bool { return !now.Before(s.next) }
+
+// failed retries after the backlog interval, not on the next loop: a failing
+// pass must not rescan every draft and log an error every minute.
+func (s *kevReconcileSchedule) failed(now time.Time) { s.next = now.Add(kevReconcileBacklogInterval) }
+
+// completed schedules the next pass and logs a pass that changed anything or
+// whose count of briefs needing editorial review moved.
+func (s *kevReconcileSchedule) completed(now time.Time, result pipeline.ExploitationReconcileResult, logger *slog.Logger) {
+	s.next = now.Add(kevReconcileInterval)
+	if result.More {
+		s.next = now.Add(kevReconcileBacklogInterval)
+	}
+	if result.Updated > 0 || result.Held != s.lastHeld {
+		logger.Info("exploitation reconciliation pass", "candidates", result.Candidates, "updated", result.Updated,
+			"corrected", result.Corrected, "notified", result.Notified, "needs_review", result.Held, "more", result.More)
+	}
+	s.lastHeld = result.Held
 }
 
 // handleLoopError reports operational failures and tells the caller to stop

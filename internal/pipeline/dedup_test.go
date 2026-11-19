@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -197,6 +198,19 @@ func TestEvaluateCVEOverlap(t *testing.T) {
 				Source:   "cisa-kev",
 				Title:    "CVE-2026-1234",
 				Content:  "This vulnerability is actively exploited in the wild.",
+			},
+			expect: DedupUpdate,
+		},
+		{
+			// CISA KEV counts attempted exploitation. GreyNoise's Java4Shell
+			// report was skipped as a duplicate on 2026-11-18 because no
+			// update term matched its wording.
+			name: "observed exploitation attempts → update",
+			item: scraper.RawItem{
+				SourceID: "greynoise:java4shell",
+				Source:   "greynoise",
+				Title:    "Global Event: CVE-2026-1234 Live Activity Report",
+				Content:  "GreyNoise is monitoring scanning and exploitation attempts against CVE-2026-1234.",
 			},
 			expect: DedupUpdate,
 		},
@@ -779,5 +793,35 @@ func TestDedupChangedSourceRevisionTargetsExistingDraft(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A detection rule names what it looks for ("Potential CVE-X Exploitation
+// Attempt"), not what was observed. Its wording must not mark the CVE as
+// exploited, or a later genuine "now actively exploited" report would be
+// skipped as a duplicate instead of routed as an update.
+func TestDetectionRuleWordingDoesNotSuppressExploitationUpdates(t *testing.T) {
+	sigma := scraper.RawItem{SourceID: "sigma-hq:rule", Source: "sigma-hq", Title: "Potential CVE-2026-4321 Exploitation Attempt",
+		Content: "Detects potential exploitation attempts of CVE-2026-4321 against WidgetServer."}
+	for _, item := range []scraper.RawItem{sigma, {Source: "elastic", Title: "CVE-2026-4321 exploit attempts", Content: "Identifies exploit attempts."}} {
+		if BuildCVEContext(item, nil).ActiveExploitation {
+			t.Fatalf("detection wording recorded as exploitation: %s", item.Title)
+		}
+	}
+	if !BuildCVEContext(scraper.RawItem{Source: "greynoise", Content: "GreyNoise observed exploitation attempts against CVE-2026-4321."}, nil).ActiveExploitation {
+		t.Fatal("observed exploitation attempts not recorded")
+	}
+
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	dedup := NewDeduplicator(db, quietLogger())
+	ctx, _ := json.Marshal(BuildCVEContext(sigma, nil))
+	if err := db.IndexContent(&storage.ContentIndexEntry{CVEID: "CVE-2026-4321", DraftID: "d", SourceID: sigma.SourceID, Source: sigma.Source, CVEContext: string(ctx), CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := db.FindByCVE("CVE-2026-4321")
+	news := scraper.RawItem{SourceID: "bleepingcomputer:1", Source: "bleepingcomputer", Title: "CVE-2026-4321 now exploited", Content: "The WidgetServer flaw CVE-2026-4321 is now actively exploited in the wild."}
+	if got := dedup.evaluateCVEOverlap(news, "CVE-2026-4321", entries); got != DedupUpdate {
+		t.Fatalf("genuine exploitation report after a detection rule: got %d, want update", got)
 	}
 }

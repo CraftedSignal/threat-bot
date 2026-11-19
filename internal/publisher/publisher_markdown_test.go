@@ -1032,3 +1032,15 @@ func TestPublishBriefMarkdownRecordsNewestPublicBrief(t *testing.T) {
 	}
 	assertNewest("2026-10-18T09:00:00Z", pushedC)
 }
+
+func TestParseBriefYAMLDropsJunkClaimState(t *testing.T) {
+	for state, want := range map[string]string{"<nil>": "", "": "", "verified": "verified", "disputed": "disputed"} {
+		brief, err := ParseBriefYAML("id: b\nclaim_state: \"" + state + "\"\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if brief.ClaimState != want {
+			t.Errorf("claim_state %q published as %q, want %q", state, brief.ClaimState, want)
+		}
+	}
+}

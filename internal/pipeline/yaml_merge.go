@@ -174,8 +174,8 @@ func mergeExploitationState(base, incoming map[string]any) bool {
 		current = next
 		changed = true
 	} else {
-		currentRank := exploitationEvidenceRank(fmt.Sprint(current["status"]))
-		nextRank := exploitationEvidenceRank(fmt.Sprint(next["status"]))
+		currentRank := exploitationStateRank(current)
+		nextRank := exploitationStateRank(next)
 		if nextRank > currentRank {
 			base["exploitation_evidence"] = next
 			current = next
@@ -185,13 +185,24 @@ func mergeExploitationState(base, incoming map[string]any) bool {
 			changed = true
 		}
 	}
-	if exploitationEvidenceRank(fmt.Sprint(current["status"])) == exploitationEvidenceRank("confirmed_active") {
+	if exploitationStateRank(current) == exploitationEvidenceRank("confirmed_active") {
 		if exploited, _ := base["exploited"].(bool); !exploited {
 			base["exploited"] = true
 			changed = true
 		}
 	}
 	return changed
+}
+
+// exploitationStateRank ranks an evidence state. A confirmed state whose only
+// evidence is an exploit-code listing asserts nothing, so attributed evidence
+// from a later source replaces it instead of keeping the listing URL.
+func exploitationStateRank(evidence map[string]any) int {
+	rank := exploitationEvidenceRank(fmt.Sprint(evidence["status"]))
+	if rank == exploitationEvidenceRank("confirmed_active") && ExploitCodeListingURL(fmt.Sprint(evidence["source_url"])) {
+		return 0
+	}
+	return rank
 }
 
 func exploitationEvidenceRank(status string) int {

@@ -324,3 +324,20 @@ func TestL3UpdateDispatchAllowsExploitationReporters(t *testing.T) {
 		})
 	}
 }
+
+// A draft still carrying listing-only evidence must take a later attributed
+// confirmation, not keep the sploitus URL that publication withdraws.
+func TestMergeExploitationStateReplacesListingOnlyEvidence(t *testing.T) {
+	base := map[string]any{"exploited": true, "exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://sploitus.com/exploit?id=X"}}
+	incoming := map[string]any{"exploited": true, "exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://news.example/attacks", "confidence": "high"}}
+	if !mergeExploitationState(base, incoming) {
+		t.Fatal("attributed confirmation not merged")
+	}
+	if got := base["exploitation_evidence"].(map[string]any)["source_url"]; got != "https://news.example/attacks" {
+		t.Fatalf("listing URL kept: %v", got)
+	}
+	// Two attributed confirmations keep the first source.
+	if mergeExploitationState(base, map[string]any{"exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://other.example/x"}}) {
+		t.Fatal("equal-rank attributed evidence replaced the first source")
+	}
+}

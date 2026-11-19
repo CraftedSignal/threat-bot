@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -53,8 +55,16 @@ func runDraftsNotifyUpdate(ctx context.Context, db *storage.DB, args []string, o
 	if state := strings.ToLower(strings.TrimSpace(lifecycle.ClaimState)); (state == "disputed" || state == "retracted") && !*force {
 		return fmt.Errorf("draft %q is a %s claim; pass --force to notify anyway", *id, state)
 	}
-	var projector *publisher.Publisher // the projection needs no publisher state
-	brief, err := pipeline.UpdateNotification(draft.BriefYAML, strings.TrimSpace(*summary), cfg.Publish.SiteURL, projector)
+	// The automatic paths validate a draft before they notify; so does this
+	// one. A draft that fails the publication contract cannot be the live
+	// revision, so its fields may not match the page the notification links
+	// to. Validation and projection are local: no token, no network.
+	local := publisher.New(cfg.Publish.RepoSlug, cfg.Publish.FeedPublicKey, func() string { return "" },
+		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})), publicationSettings(cfg))
+	if err := local.ValidatePublication(draft.BriefYAML); err != nil {
+		return fmt.Errorf("draft %q fails the publication contract, so it may not be the live revision; correct it with drafts amend first: %w", *id, err)
+	}
+	brief, err := pipeline.UpdateNotification(draft.BriefYAML, strings.TrimSpace(*summary), cfg.Publish.SiteURL, local)
 	if err != nil {
 		return fmt.Errorf("building notification: %w", err)
 	}

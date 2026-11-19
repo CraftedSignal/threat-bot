@@ -121,6 +121,17 @@ func TestDraftsNotifyUpdatePreviewsAndSendsThePublicProjection(t *testing.T) {
 		t.Fatalf("disputed claim sent without --force: err=%v posts=%d", err, len(posts))
 	}
 
+	// A draft failing the publication contract is not the live revision:
+	// refused even with --force. (This one still renders, so only the
+	// publication gate stops it.)
+	invalid := strings.Replace(notifyDraftYAML, "severity: high\n", "severity: urgent\n", 1)
+	if err := db.CreateDraft(&storage.Draft{ID: "invalid", Status: storage.StatusApproved, Source: "nvd", BriefYAML: invalid, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "invalid", "--summary", "x", "--send", "--force"}, &out); err == nil || !strings.Contains(err.Error(), "publication contract") || len(posts) != 2 {
+		t.Fatalf("draft failing the publication contract sent: err=%v posts=%d", err, len(posts))
+	}
+
 	// An unpublished brief (no vendor or product) has no page to link to.
 	generic := strings.NewReplacer("affected_vendors: [Acme]\n", "", "affected_products: [WidgetServer]\n", "").Replace(notifyDraftYAML)
 	if err := db.CreateDraft(&storage.Draft{ID: "generic", Status: storage.StatusApproved, Source: "nvd", BriefYAML: generic, CreatedAt: time.Now()}); err != nil {

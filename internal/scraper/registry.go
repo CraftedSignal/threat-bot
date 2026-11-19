@@ -357,7 +357,18 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 	if queueErr != nil {
 		durableErrs = append(durableErrs, fmt.Errorf("loading ingestion queue: %w", queueErr))
 	}
+	// This cycle's observation is the current state of its source. A queued
+	// revision of the same source is either the same input or an older one;
+	// processing it too would repeat or overwrite the current candidate. The
+	// queue drops it once the current observation is retained.
+	observed := make(map[string]bool, len(allItems))
+	for _, item := range allItems {
+		observed[item.SourceID] = true
+	}
 	for _, candidate := range queued {
+		if observed[candidate.SourceID] {
+			continue
+		}
 		var item RawItem
 		if err := json.Unmarshal([]byte(candidate.Payload), &item); err != nil {
 			durableErrs = append(durableErrs, fmt.Errorf("decoding queued candidate %s: %w", candidate.SourceID, err))

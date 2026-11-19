@@ -378,7 +378,19 @@ var extractedTechniqueID = regexp.MustCompile(`^T[0-9]{4}(?:\.[0-9]{3})?$`)
 
 // ValidateLLMResponse rejects unusable typed artifacts before either online or
 // batch cache persists them. Factual relevance still belongs to source grounding.
+//
+// Indicators are optional evidence with a closed type vocabulary. An entry the
+// pipeline cannot use (unsupported type or empty value) is dropped rather than
+// failing the whole extraction: the model repeats it for the same source, so
+// rejecting would leave that source unprocessable on every retry.
 func (r *ExtractionResult) ValidateLLMResponse() error {
+	usable := r.IOCs[:0:0]
+	for _, ioc := range r.IOCs {
+		if supportedExtractedIOCType(ioc.Type) && strings.TrimSpace(ioc.Value) != "" {
+			usable = append(usable, ioc)
+		}
+	}
+	r.IOCs = usable
 	if strings.TrimSpace(r.Summary) == "" && len(r.CVEs) == 0 && len(r.ChainedCVEs) == 0 && len(r.Techniques) == 0 && len(r.Tactics) == 0 && len(r.IOCs) == 0 && len(r.AffectedVendors) == 0 && len(r.AffectedProducts) == 0 && len(r.AffectedOS) == 0 && r.ClaimAssessment == nil && strings.TrimSpace(r.ThreatActor) == "" {
 		return fmt.Errorf("empty extraction has no assessment")
 	}
@@ -399,15 +411,15 @@ func (r *ExtractionResult) ValidateLLMResponse() error {
 			return fmt.Errorf("invalid extracted technique identifier")
 		}
 	}
-	for _, ioc := range r.IOCs {
-		switch ioc.Type {
-		case "ip", "domain", "url", "hash_sha256", "hash_md5", "email":
-		default:
-			return fmt.Errorf("invalid extracted indicator type")
-		}
-		if strings.TrimSpace(ioc.Value) == "" {
-			return fmt.Errorf("empty extracted indicator")
-		}
-	}
 	return nil
+}
+
+// supportedExtractedIOCType is the indicator vocabulary the extraction prompt
+// defines and downstream verification understands.
+func supportedExtractedIOCType(kind string) bool {
+	switch kind {
+	case "ip", "domain", "url", "hash_sha256", "hash_md5", "email":
+		return true
+	}
+	return false
 }

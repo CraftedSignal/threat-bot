@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -86,5 +89,57 @@ func TestPrimaryEvidenceBookkeepingFailureStaysHeldAcrossRestart(t *testing.T) {
 				t.Fatalf("malformed finding became factual rejection: quarantine=%v err=%v", quarantined, err)
 			}
 		})
+	}
+}
+
+// Re-checking a held finding needs the primary CVE record. When that lookup
+// is unavailable, the hold is kept and retried after a durable delay, like
+// any other source outage, instead of failing the item on every poll.
+func TestHeldEvidenceRefreshOutageDefersDurably(t *testing.T) {
+	const id = "CVE-2099-4001"
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	client := referenceTestLLM{respond: func(_ context.Context, _, system string, _ *llm.Schema, out any) error {
+		if system == materialOmissionEvidenceSystem {
+			return llm.DecodeStructured(`{"evidence":[]}`, out)
+		}
+		*out.(*groundingReport) = groundingReport{Issues: []groundingIssue{{Kind: groundingKindMaterialOmission, Field: "content", Subject: id, SourceQuote: "CVE Program source for " + id + ": https://cveawg.mitre.org/api/cve/" + id, Reason: "Missing fixed release."}}}
+		return nil
+	}}
+	var logs bytes.Buffer
+	cfg := Config{DB: db, LLMClient: client, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	p := New(cfg)
+	meta := verifiedAssemblyMeta(id, "Example Harbor", "Example Harbor permits unauthorized configuration changes with low privileges.")
+	p.cveVerifier.cache[id] = meta
+	item := scraper.RawItem{SourceID: "metadata:" + id, Source: "research", Title: "Example Harbor advisory (" + id + ")", URL: "https://vendor.example/harbor", Content: strings.Repeat("Example Harbor permits configuration changes with low privileges. ", 3), Enriched: true}
+	item.Revision = item.ContentRevision()
+	state := processingCandidate{Item: item, BriefYAML: syntheticCompletenessBrief(t, false)}
+	_ = p.processCandidate(context.Background(), p.processingInputKey(item), state)
+
+	// A new process cannot reach the CVE Program to rehydrate the record.
+	restarted := New(cfg)
+	restarted.cveVerifier.client = &http.Client{Transport: &mockNVDTransport{handler: func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("CVE Program unavailable")
+	}}}
+	logs.Reset()
+	if err := restarted.Process(context.Background(), []scraper.RawItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), `"msg":"pipeline error"`) || restarted.Decisions(time.Hour).Failed != 0 {
+		t.Fatalf("held evidence refresh outage paged as a failed pipeline: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), `"msg":"source evidence refresh deferred"`) || !strings.Contains(logs.String(), `"error_class":"source_unavailable"`) {
+		t.Fatalf("held evidence refresh outage not deferred: %s", logs.String())
+	}
+	cp, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil {
+		t.Fatalf("held candidate lost: %v", err)
+	}
+	var held processingCandidate
+	if err := yaml.Unmarshal([]byte(cp.Payload), &held); err != nil {
+		t.Fatal(err)
+	}
+	if held.GroundingFailure == nil || !held.sourceRefreshDeferred(restarted.processingInputKey(item)) {
+		t.Fatal("hold or durable refresh deadline not preserved")
 	}
 }

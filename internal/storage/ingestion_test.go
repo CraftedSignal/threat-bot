@@ -249,3 +249,78 @@ func TestIngestionMigrationPreservesExistingQueueAndWatermark(t *testing.T) {
 		t.Fatalf("migration lost or changed queued work: %+v %v", batch, err)
 	}
 }
+
+// A source has one current state: its most recently observed revision. Older
+// queued observations must not be delivered after it, or rotating revisions
+// rebuild the same candidate from stale evidence on every delivery.
+func TestIngestionDeliverySupersedesOlderRevisionsOfASource(t *testing.T) {
+	db, err := Open(t.TempDir() + "/queue.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	at := time.Now().UTC()
+	for i, batch := range [][]IngestionCandidate{
+		{{SourceID: "nvd:CVE-2026-0001", Source: "nvd", Revision: "received", Payload: "received"}},
+		{{SourceID: "nvd:CVE-2026-0001", Source: "nvd", Revision: "awaiting", Payload: "awaiting"}, {SourceID: "other", Source: "rss", Revision: "r", Payload: "other"}},
+		// Two observations in one handoff: the later one is current.
+		{{SourceID: "rss:item", Source: "rss", Revision: "first", Payload: "first"}, {SourceID: "rss:item", Source: "rss", Revision: "second", Payload: "second"}},
+	} {
+		if err := db.CommitIngestion("stream", at.Add(time.Duration(i)*time.Second), batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Batch retention queues a newer observation without a stream watermark.
+	if err := db.CommitIngestion("", time.Time{}, []IngestionCandidate{{SourceID: "nvd:CVE-2026-0001", Source: "nvd", Revision: "analyzed", Payload: "analyzed"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.NextIngestionCandidates(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := map[string]string{}
+	for _, c := range got {
+		if prior, dup := delivered[c.SourceID]; dup {
+			t.Fatalf("delivered two revisions of %s: %s and %s", c.SourceID, prior, c.Revision)
+		}
+		delivered[c.SourceID] = c.Revision
+	}
+	want := map[string]string{"nvd:CVE-2026-0001": "analyzed", "other": "r", "rss:item": "second"}
+	if len(delivered) != len(want) {
+		t.Fatalf("delivered %v, want %v", delivered, want)
+	}
+	for id, revision := range want {
+		if delivered[id] != revision {
+			t.Fatalf("delivered %v, want %v", delivered, want)
+		}
+	}
+	var rows int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM ingestion_candidates WHERE source_id IN ('nvd:CVE-2026-0001','rss:item')`).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("superseded revisions still occupy the queue: rows=%d err=%v", rows, err)
+	}
+	// The current revision keeps rotating while it is held.
+	again, err := db.NextIngestionCandidates(10)
+	if err != nil || len(again) != 3 {
+		t.Fatalf("current revisions not retained for retry: %v %v", again, err)
+	}
+	// Completing the current revision must not resurrect an older one that
+	// was queued before it: that would reprocess stale evidence.
+	if err := db.CommitIngestion("", time.Time{}, []IngestionCandidate{{SourceID: "late", Source: "rss", Revision: "old", Payload: "old"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CommitIngestion("", time.Time{}, []IngestionCandidate{{SourceID: "late", Source: "rss", Revision: "new", Payload: "new"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkSeenRevision("late", "rss", "late", "new"); err != nil {
+		t.Fatal(err)
+	}
+	final, err := db.NextIngestionCandidates(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range final {
+		if c.SourceID == "late" {
+			t.Fatalf("delivered %s revision %s after its newer revision completed", c.SourceID, c.Revision)
+		}
+	}
+}

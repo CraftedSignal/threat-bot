@@ -439,9 +439,17 @@ func (p *Pipeline) processBatchChunk(ctx context.Context, chunk []scraper.RawIte
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return ctxErr
 				}
-				p.decisions.record(outcomeFailed)
-				p.logger.Error("pipeline error", "source_id", item.SourceID,
-					"source", item.Source, "error_class", llm.ErrorStatus(err), "error", err)
+				// Waiting for a paid remote batch prevents duplicate inference.
+				// The item stays unconsumed and resumes once the answer exists.
+				var pending *llm.PendingBatchError
+				if errors.As(err, &pending) {
+					p.logger.Warn("item deferred while paid batch work is pending", "source_id", item.SourceID,
+						"source", item.Source, "error_class", "batch_pending", "error", err)
+				} else {
+					p.decisions.record(outcomeFailed)
+					p.logger.Error("pipeline error", "source_id", item.SourceID,
+						"source", item.Source, "error_class", llm.ErrorStatus(err), "error", err)
+				}
 			}
 			if p.autoPublish && p.publisher != nil {
 				*published++

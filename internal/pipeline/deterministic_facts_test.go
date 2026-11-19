@@ -49,13 +49,13 @@ affected_products:
 
 func TestInjectAffectedRangesHoldsAmbiguousBranches(t *testing.T) {
 	item := synologyItem()
-	once := injectAffectedRanges(synologyBrief, item)
+	once := injectAffectedRanges(synologyBrief, item, primaryRecordFacts{})
 	for _, v := range []string{"7.3.2-86009-5", "7.4.1-90080-1"} {
 		if strings.Contains(once, v) {
 			t.Errorf("ambiguous branch %s injected:\n%s", v, once)
 		}
 	}
-	if twice := injectAffectedRanges(once, item); twice != once {
+	if twice := injectAffectedRanges(once, item, primaryRecordFacts{}); twice != once {
 		t.Errorf("injection is not idempotent:\n%s\n---\n%s", once, twice)
 	}
 	var doc map[string]any
@@ -71,7 +71,7 @@ func TestInjectAffectedRangesUsesNVDMetadataRanges(t *testing.T) {
 	item := scraper.RawItem{Source: "nvd", Content: "no versions in prose", Metadata: map[string]string{
 		"affected_ranges": "diskstation manager: >= 7.3.0, < 7.3.2\nother gadget: <= 9.1",
 	}}
-	got := injectAffectedRanges(synologyBrief, item)
+	got := injectAffectedRanges(synologyBrief, item, primaryRecordFacts{})
 	if !strings.Contains(got, "DiskStation Manager (>= 7.3.0, < 7.3.2)") {
 		t.Errorf("metadata range not merged:\n%s", got)
 	}

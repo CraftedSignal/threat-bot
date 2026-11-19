@@ -18,7 +18,7 @@ func TestSourceScopeDoesNotLeakAcrossProductsOrBranches(t *testing.T) {
 		"ambiguous multiple branches":           {"  - Moby\n", "Moby before 25.0.6 and 26.0.2 is affected.", "Moby (<"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := injectAffectedRanges("affected_products:\n"+tc.products, scraper.RawItem{Source: "nvd", Content: tc.source})
+			got := injectAffectedRanges("affected_products:\n"+tc.products, scraper.RawItem{Source: "nvd", Content: tc.source}, primaryRecordFacts{})
 			if strings.Contains(got, tc.forbidden) {
 				t.Fatalf("unsupported scope injected: %s", got)
 			}
@@ -27,7 +27,7 @@ func TestSourceScopeDoesNotLeakAcrossProductsOrBranches(t *testing.T) {
 }
 
 func TestSourceScopeMapsExplicitSeparateProducts(t *testing.T) {
-	got := injectAffectedRanges("affected_products:\n  - Docker Engine\n  - Moby\n", scraper.RawItem{Source: "nvd", Content: "Docker Engine before 24.0.9 is affected. Moby before 26.0.2 is affected."})
+	got := injectAffectedRanges("affected_products:\n  - Docker Engine\n  - Moby\n", scraper.RawItem{Source: "nvd", Content: "Docker Engine before 24.0.9 is affected. Moby before 26.0.2 is affected."}, primaryRecordFacts{})
 	if !strings.Contains(got, "Docker Engine (< 24.0.9)") || !strings.Contains(got, "Moby (< 26.0.2)") || strings.Contains(got, "24.0.9, < 26.0.2") {
 		t.Fatal(got)
 	}
@@ -50,7 +50,7 @@ func TestSeverityRecordsDeterministicBasis(t *testing.T) {
 
 func TestOptimoleCommaScopeDoesNotInventFixedRelease(t *testing.T) {
 	source := "The Optimole plugin for WordPress is vulnerable in all versions up to, and including, 4.2.19."
-	got := injectAffectedRanges("affected_products: [Optimole]\n", scraper.RawItem{Source: "nvd", Content: source})
+	got := injectAffectedRanges("affected_products: [Optimole]\n", scraper.RawItem{Source: "nvd", Content: source}, primaryRecordFacts{})
 	if !strings.Contains(got, "Optimole (<= 4.2.19)") {
 		t.Fatal(got)
 	}
@@ -67,7 +67,7 @@ func TestRepairRejectedScopeCannotBeReinjected(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := yaml.Marshal(merged)
-	got := injectAffectedRanges(string(encoded), scraper.RawItem{Source: "nvd", Content: "Moby before 25.0.6 is affected."})
+	got := injectAffectedRanges(string(encoded), scraper.RawItem{Source: "nvd", Content: "Moby before 25.0.6 is affected."}, primaryRecordFacts{})
 	if strings.Contains(got, "Moby (<") {
 		t.Fatal(got)
 	}

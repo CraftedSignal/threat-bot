@@ -19,9 +19,19 @@ func (p *Pipeline) groundingEvidence(item scraper.RawItem, briefYAML string) str
 	if p.cveVerifier == nil {
 		return source
 	}
+	primary := p.verifiedPrimaryEvidence(groundingPrimaryCVEs(item, briefYAML))
+	if primary == "" {
+		return source
+	}
+	return primary + "\nOriginal source:\n" + source
+}
+
+// groundingPrimaryCVEs are the brief targets the source itself asserts, in the
+// order the grounding evidence lists their primary records.
+func groundingPrimaryCVEs(item scraper.RawItem, briefYAML string) []string {
 	targets := groundingTargetCVEs(parseBriefFrontmatter(briefYAML))
 	asserted := map[string]bool{}
-	for _, id := range sourceCVEPattern.FindAllString(item.Title+"\n"+source, -1) {
+	for _, id := range sourceCVEPattern.FindAllString(item.Title+"\n"+groundingSource(item), -1) {
 		asserted[strings.ToUpper(id)] = true
 	}
 	var ids []string
@@ -31,25 +41,48 @@ func (p *Pipeline) groundingEvidence(item scraper.RawItem, briefYAML string) str
 		}
 	}
 	sort.Strings(ids)
-	primary := p.verifiedPrimaryEvidence(ids)
-	if primary == "" {
-		return source
+	return ids
+}
+
+// groundingPrimaryFacts returns the structured record facts of the brief's
+// grounding evidence, split by whether the checker receives them intact.
+func (p *Pipeline) groundingPrimaryFacts(item scraper.RawItem, briefYAML string) primaryRecordFacts {
+	if p.cveVerifier == nil {
+		return primaryRecordFacts{}
 	}
-	return primary + "\nOriginal source:\n" + source
+	_, facts := p.verifiedPrimaryFacts(groundingPrimaryCVEs(item, briefYAML))
+	return facts
+}
+
+// injectSourceRanges renders the scope stated by the item and by the primary
+// records in the brief's grounding evidence.
+func (p *Pipeline) injectSourceRanges(briefYAML string, item scraper.RawItem) string {
+	return injectAffectedRanges(briefYAML, item, p.groundingPrimaryFacts(item, briefYAML))
 }
 
 // Both generation and independent grounding use this bounded representation.
 // Every record retains its CVE/product identity; truncation never splices facts.
 func (p *Pipeline) verifiedPrimaryEvidence(ids []string) string {
+	evidence, _ := p.verifiedPrimaryFacts(ids)
+	return evidence
+}
+
+// verifiedPrimaryFacts builds the bounded evidence text and reports which
+// structured facts it carries intact. A fact the size limit or a cross-record
+// reference kept out is incomplete, and a record that lost affected entries
+// marks the facts truncated.
+func (p *Pipeline) verifiedPrimaryFacts(ids []string) (string, primaryRecordFacts) {
 	var evidence strings.Builder
+	var facts primaryRecordFacts
 	omitted := false
-	add := func(line string) {
+	add := func(line string) bool {
 		if evidence.Len()+len(line)+1 > maxCNAEvidenceBytes-512 {
 			omitted = true
-			return
+			return false
 		}
 		evidence.WriteString(line)
 		evidence.WriteByte('\n')
+		return true
 	}
 	for _, id := range ids {
 		meta := p.cveVerifier.GetMeta(id)
@@ -57,9 +90,13 @@ func (p *Pipeline) verifiedPrimaryEvidence(ids []string) string {
 			continue
 		}
 		add("CVE Program source for " + id + ": https://cveawg.mitre.org/api/cve/" + id)
+		if meta.CNAAffectedIncomplete {
+			facts.Truncated = true
+		}
 		for _, fact := range meta.CNAFacts {
 			if fact.CVEID != id {
 				omitted = true
+				facts.Incomplete = append(facts.Incomplete, fact)
 				continue
 			}
 			crossRecord := false
@@ -70,12 +107,15 @@ func (p *Pipeline) verifiedPrimaryEvidence(ids []string) string {
 			}
 			if crossRecord {
 				omitted = true
+				facts.Incomplete = append(facts.Incomplete, fact)
 				continue
 			}
 			raw, err := json.Marshal(fact)
-			if err == nil {
-				add(string(raw))
+			if err != nil || !add(string(raw)) {
+				facts.Incomplete = append(facts.Incomplete, fact)
+				continue
 			}
+			facts.Included = append(facts.Included, fact)
 		}
 		gap := meta.CNAGap
 		if len(meta.CNAFacts) == 0 && gap == "" {
@@ -86,12 +126,12 @@ func (p *Pipeline) verifiedPrimaryEvidence(ids []string) string {
 		}
 	}
 	if evidence.Len() == 0 {
-		return ""
+		return "", primaryRecordFacts{}
 	}
 	if omitted {
 		evidence.WriteString("Coverage incomplete: size limits or cross-record references omitted source fields. Do not infer missing facts.\n")
 	}
-	return "Verified primary CVE evidence. Keep each fact attached to its CVE and product; a record-wide solution is not a fix for every product. Resolve conflicts through explicit uncertainty or editorial review.\n" + evidence.String()
+	return "Verified primary CVE evidence. Keep each fact attached to its CVE and product; a record-wide solution is not a fix for every product. Resolve conflicts through explicit uncertainty or editorial review.\n" + evidence.String(), facts
 }
 
 // Generated briefs do not yet carry the pipeline-owned cves list. Narrative

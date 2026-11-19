@@ -117,7 +117,14 @@ func publicationCVEs(field any, title string) []string {
 }
 
 func publicationNarrowProduct(title string, products []string) bool {
-	if len(publicationUnique(products)) != 1 {
+	// One product can carry several "Product (range)" entries, one per
+	// affected version range; they still name a single product.
+	names := make([]string, 0, len(products))
+	for _, product := range products {
+		name, _ := SplitProductVersionScope(product)
+		names = append(names, name)
+	}
+	if len(publicationUnique(names)) != 1 {
 		return false
 	}
 	lower := strings.ToLower(title)

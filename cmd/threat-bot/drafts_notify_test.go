@@ -98,4 +98,43 @@ func TestDraftsNotifyUpdatePreviewsAndSendsThePublicProjection(t *testing.T) {
 	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "d"}, &out); err == nil {
 		t.Fatal("missing summary accepted")
 	}
+
+	// A repeat inside the cooldown needs --force; the preview says when the
+	// last one went out.
+	out.Reset()
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "d", "--summary", "exploited:true"}, &out); err != nil || !strings.Contains(out.String(), "Last update notification:") {
+		t.Fatalf("preview lacks the last dispatch: %v\n%s", err, out.String())
+	}
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "d", "--summary", "exploited:true", "--send"}, &out); err == nil || len(posts) != 1 {
+		t.Fatalf("repeat inside the cooldown sent without --force: err=%v posts=%d", err, len(posts))
+	}
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "d", "--summary", "exploited:true", "--send", "--force"}, &out); err != nil || len(posts) != 2 {
+		t.Fatalf("--force did not send: err=%v posts=%d", err, len(posts))
+	}
+
+	// Disputed claims are refused without --force, like the automatic path.
+	disputed := strings.Replace(notifyDraftYAML, "severity: high\n", "severity: high\nclaim_state: disputed\n", 1)
+	if err := db.CreateDraft(&storage.Draft{ID: "disputed", Status: storage.StatusApproved, Source: "nvd", BriefYAML: disputed, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "disputed", "--summary", "x", "--send"}, &out); err == nil || len(posts) != 2 {
+		t.Fatalf("disputed claim sent without --force: err=%v posts=%d", err, len(posts))
+	}
+
+	// An unpublished brief (no vendor or product) has no page to link to.
+	generic := strings.NewReplacer("affected_vendors: [Acme]\n", "", "affected_products: [WidgetServer]\n", "").Replace(notifyDraftYAML)
+	if err := db.CreateDraft(&storage.Draft{ID: "generic", Status: storage.StatusApproved, Source: "nvd", BriefYAML: generic, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDraftsNotifyUpdate(context.Background(), db, []string{"--id", "generic", "--summary", "x", "--send", "--force"}, &out); err == nil || len(posts) != 2 {
+		t.Fatalf("unpublished brief sent: err=%v posts=%d", err, len(posts))
+	}
+}
+
+// A nil publisher must reach the pipeline as a nil interface: a typed nil
+// looks configured, and the reconciliation then panicked validating through it.
+func TestBriefPublisherOrNilKeepsNilPublishersNil(t *testing.T) {
+	if got := briefPublisherOrNil(nil); got != nil {
+		t.Fatalf("typed nil publisher leaked into the interface: %#v", got)
+	}
 }

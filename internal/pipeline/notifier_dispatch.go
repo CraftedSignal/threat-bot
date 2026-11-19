@@ -92,6 +92,10 @@ type PublicNotificationFields struct {
 	HasPOC      bool     `yaml:"has_poc"`
 }
 
+// ErrBriefNotPublished reports a brief the publisher would not publish. It has
+// no public page, so it must not notify subscribers.
+var ErrBriefNotPublished = errors.New("brief is not published")
+
 // notificationProjector renders a draft's public notification fields. The
 // publisher implements it from the front matter it publishes.
 type notificationProjector interface {
@@ -159,13 +163,19 @@ func (p *Pipeline) maybeDispatchL3Update(ctx context.Context, draftID string, su
 		p.logger.Warn("L3 dispatch payload build failed", "draft_id", draftID, "error", err)
 		return
 	}
+	// With a publisher, notify only with the published fields: a brief that
+	// is not published (or cannot be rendered) has no page to link to.
 	if projector, ok := p.publisher.(notificationProjector); ok {
 		fields, err := projector.PublicNotificationFields(draft.BriefYAML)
-		if err != nil {
-			p.logger.Warn("L3 dispatch public projection failed; sending draft fields", "draft_id", draftID, "error", err)
-		} else {
-			brief = brief.withPublicFields(fields, siteURL)
+		if errors.Is(err, ErrBriefNotPublished) {
+			p.logger.Info("L3 update suppressed: brief is not published", "draft_id", draftID)
+			return
 		}
+		if err != nil {
+			p.logger.Warn("L3 update suppressed: public projection failed", "draft_id", draftID, "error", err)
+			return
+		}
+		brief = brief.withPublicFields(fields, siteURL)
 	}
 	var lifecycle struct {
 		ClaimState string `yaml:"claim_state"`

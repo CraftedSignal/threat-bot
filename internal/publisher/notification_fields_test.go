@@ -3,6 +3,7 @@ package publisher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -63,13 +64,16 @@ func TestPublicNotificationFieldsEqualPublishedFrontmatter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	brief, err := ParseBriefYAML(notificationDraftYAML)
+	// Compare with what the live publish path writes, not with the helper
+	// the projection uses, so drift in either side fails here.
+	live := New("example/feed", "", func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	prepared, err := live.prepareBrief(notificationDraftYAML)
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := briefToMarkdown(*brief)
-	if err != nil {
-		t.Fatal(err)
+	_, content, _, publish, err := RenderPublicBriefMarkdown(*prepared, nil)
+	if err != nil || !publish {
+		t.Fatalf("fixture not publishable: publish=%v err=%v", publish, err)
 	}
 	raw, ok := renderedFrontmatter(content)
 	if !ok {
@@ -158,4 +162,17 @@ func (noopPublisherLLM) Generate(context.Context, string, string) (string, error
 func (noopPublisherLLM) GenerateJSON(context.Context, string, string, any) error  { return nil }
 func (noopPublisherLLM) GenerateStructured(context.Context, string, string, *llm.Schema, any) error {
 	return nil
+}
+
+// A brief the publisher does not publish has no public page, so it must not
+// notify: its projection reports ErrBriefNotPublished.
+func TestPublicNotificationFieldsRefusesUnpublishedBriefs(t *testing.T) {
+	generic := strings.NewReplacer("affected_vendors: [Acme]\n", "", "affected_products: [\"WidgetServer (>= 4.0.0, < 4.2.1)\"]\n", "").Replace(notificationDraftYAML)
+	if strings.Contains(generic, "affected_vendors") || strings.Contains(generic, "affected_products") {
+		t.Fatal("fixture still names a vendor or product")
+	}
+	var p *Publisher
+	if _, err := p.PublicNotificationFields(generic); !errors.Is(err, pipeline.ErrBriefNotPublished) {
+		t.Fatalf("generic CVE brief projected for notification: %v", err)
+	}
 }

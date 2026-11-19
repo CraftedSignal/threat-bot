@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -496,5 +497,41 @@ func TestL3UpdateUsesThePublicProjection(t *testing.T) {
 		strings.Join(sent.Actors, ",") != "Storm-1" || !sent.Exploited || !sent.HasPOC || !sent.IsUpdate || sent.UpdateSummary != "exploited:true" ||
 		sent.Slug != "public-slug" || sent.URL != "https://feed.example/briefs/public-slug/" {
 		t.Fatalf("payload does not carry the public projection: %+v", sent)
+	}
+}
+
+type failingProjector struct{ err error }
+
+func (failingProjector) Publish(string) error { return nil }
+func (failingProjector) Flush() error         { return nil }
+func (f failingProjector) PublicNotificationFields(string) (PublicNotificationFields, error) {
+	return PublicNotificationFields{}, f.err
+}
+
+// No public page, no notification: an unpublished brief, or one the
+// publisher cannot render, is never dispatched with draft fields instead.
+func TestL3UpdateSkipsBriefsWithoutAPublicProjection(t *testing.T) {
+	for name, projErr := range map[string]error{"not published": fmt.Errorf("brief x: %w", ErrBriefNotPublished), "render failure": errors.New("contract")} {
+		t.Run(name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			if err := db.CreateDraft(&storage.Draft{ID: "d", Status: storage.StatusApproved, Source: "nvd", BriefYAML: kevReconcileBriefYAML, CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			var dispatched recordedDispatch
+			server := dispatched.server(t)
+			defer server.Close()
+			p := kevReconcilePipeline(t, db, kevTestCatalog(t, map[string]string{"CVE-2099-1": ""}), server.URL)
+			p.publisher = failingProjector{err: projErr}
+			p.maybeDispatchL3Update(context.Background(), "d", "exploited:true", "greynoise", p.siteURL)
+			dispatched.mu.Lock()
+			defer dispatched.mu.Unlock()
+			if len(dispatched.posts) != 0 {
+				t.Fatalf("dispatched without a public projection: %+v", dispatched.posts)
+			}
+			if draft, _ := db.GetDraft("d"); draft.LastL3Dispatch != nil {
+				t.Fatal("suppressed dispatch was recorded")
+			}
+		})
 	}
 }

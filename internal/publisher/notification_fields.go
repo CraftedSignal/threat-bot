@@ -15,16 +15,23 @@ import (
 // public type and keeps vendors and products under affected_*, so update
 // payloads built from it alone matched no type-filtered subscription.
 //
-// It uses no publisher state, so it is safe on a nil receiver.
+// It renders through the same gate as publication (RenderPublicBriefMarkdown).
+// A brief the publisher would not publish (a generic CVE brief without vendor
+// or product, placeholder-only text) has no public page, so it returns
+// pipeline.ErrBriefNotPublished and must not notify. It uses no publisher
+// state, so it is safe on a nil receiver.
 func (*Publisher) PublicNotificationFields(briefYAML string) (pipeline.PublicNotificationFields, error) {
 	var fields pipeline.PublicNotificationFields
 	brief, err := ParseBriefYAML(briefYAML)
 	if err != nil {
 		return fields, err
 	}
-	content, err := briefToMarkdown(*brief)
+	_, content, _, publish, err := RenderPublicBriefMarkdown(*brief, nil)
 	if err != nil {
 		return fields, err
+	}
+	if !publish {
+		return fields, fmt.Errorf("brief %q: %w", brief.ID, pipeline.ErrBriefNotPublished)
 	}
 	frontmatter, ok := renderedFrontmatter(content)
 	if !ok {

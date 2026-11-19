@@ -192,7 +192,7 @@ func runScraper() {
 		MaxGroundingAttempts:   cfg.Pipeline.MaxGroundingAttempts,
 		SourceConfidence:       cfg.Pipeline.SourceConfidence,
 		SourceSignalThresholds: cfg.Pipeline.SourceSignalThresholds,
-		Publisher:              pub,
+		Publisher:              briefPublisherOrNil(pub),
 		AutoPublish:            cfg.Pipeline.AutoPublish,
 		RoundupConsolidation:   cfg.Pipeline.RoundupConsolidation,
 		CampaignConsolidation:  cfg.Pipeline.CampaignConsolidation,
@@ -413,6 +413,16 @@ func runScraper() {
 		case <-time.After(1 * time.Minute):
 		}
 	}
+}
+
+// briefPublisherOrNil keeps a nil publisher a nil interface. A typed nil
+// stored in pipeline.Config.Publisher looks configured: the reconciliation
+// then validates through it and panics on the nil receiver.
+func briefPublisherOrNil(pub *publisher.Publisher) pipeline.BriefPublisher {
+	if pub == nil {
+		return nil
+	}
+	return pub
 }
 
 // Exploitation reconciliation runs hourly, every 10 minutes while a backlog

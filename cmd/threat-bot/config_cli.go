@@ -75,7 +75,7 @@ func validateCommandConfig(command string, args []string) error {
 
 func draftsNeedPublisher(args []string) (bool, error) {
 	if len(args) == 0 {
-		return false, fmt.Errorf("usage: threat-bot drafts <list|find|show|approve|reject|amend|republish|retire-duplicates>")
+		return false, fmt.Errorf("usage: threat-bot drafts <list|find|show|approve|reject|amend|republish|retire-duplicates|notify-update>")
 	}
 	switch args[0] {
 	case "approve":
@@ -89,7 +89,7 @@ func draftsNeedPublisher(args []string) (bool, error) {
 	case "retire-duplicates":
 		opts, err := parseDraftRetirementOptions(args[1:])
 		return opts.apply, err
-	case "list", "find", "show", "reject":
+	case "list", "find", "show", "reject", "notify-update":
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown drafts command: %s", args[0])

@@ -69,8 +69,63 @@ type dispatchBrief struct {
 	Products      []string `json:"products,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
 	Exploited     bool     `json:"exploited,omitempty"`
+	HasPOC        bool     `json:"has_poc,omitempty"`
 	IsUpdate      bool     `json:"is_update,omitempty"`
 	UpdateSummary string   `json:"update_summary,omitempty"`
+}
+
+// PublicNotificationFields are the fields subscribers filter on, exactly as a
+// brief's published front matter carries them. New-brief notifications read
+// them from the published file (Site Deploy); update notifications must use
+// the same projection, or the same subscription matches one and not the other.
+type PublicNotificationFields struct {
+	Slug        string   `yaml:"slug"`
+	Title       string   `yaml:"title"`
+	Description string   `yaml:"description"`
+	Type        string   `yaml:"type"`
+	Severities  []string `yaml:"severities"`
+	Actors      []string `yaml:"actors"`
+	Vendors     []string `yaml:"vendors"`
+	Products    []string `yaml:"products"`
+	Tags        []string `yaml:"tags"`
+	Exploited   bool     `yaml:"exploited"`
+	HasPOC      bool     `yaml:"has_poc"`
+}
+
+// ErrBriefNotPublished reports a brief the publisher would not publish. It has
+// no public page, so it must not notify subscribers.
+var ErrBriefNotPublished = errors.New("brief is not published")
+
+// notificationProjector renders a draft's public notification fields. The
+// publisher implements it from the front matter it publishes.
+type notificationProjector interface {
+	PublicNotificationFields(briefYAML string) (PublicNotificationFields, error)
+}
+
+// withPublicFields replaces the filterable fields with the published
+// projection. The draft has no public type and keeps vendors, products and
+// the actor under internal names, so a payload built from it alone carried an
+// empty type and matched no subscription filtering on type.
+func (b dispatchBrief) withPublicFields(fields PublicNotificationFields, siteURL string) dispatchBrief {
+	if slug := strings.TrimSpace(fields.Slug); slug != "" {
+		b.Slug = slug
+		if siteURL != "" {
+			b.URL = strings.TrimRight(siteURL, "/") + "/briefs/" + slug + "/"
+		}
+	}
+	if strings.TrimSpace(fields.Title) != "" {
+		b.Title = fields.Title
+	}
+	if strings.TrimSpace(fields.Description) != "" {
+		b.Description = fields.Description
+	}
+	b.Type = fields.Type
+	if len(fields.Severities) > 0 && strings.TrimSpace(fields.Severities[0]) != "" {
+		b.Severity = fields.Severities[0]
+	}
+	b.Actors, b.Vendors, b.Products, b.Tags = fields.Actors, fields.Vendors, fields.Products, fields.Tags
+	b.Exploited, b.HasPOC = fields.Exploited, fields.HasPOC
+	return b
 }
 
 // maybeDispatchL3Update fires the notifier dispatch path for an L3
@@ -108,6 +163,20 @@ func (p *Pipeline) maybeDispatchL3Update(ctx context.Context, draftID string, su
 		p.logger.Warn("L3 dispatch payload build failed", "draft_id", draftID, "error", err)
 		return
 	}
+	// With a publisher, notify only with the published fields: a brief that
+	// is not published (or cannot be rendered) has no page to link to.
+	if projector, ok := p.publisher.(notificationProjector); ok {
+		fields, err := projector.PublicNotificationFields(draft.BriefYAML)
+		if errors.Is(err, ErrBriefNotPublished) {
+			p.logger.Info("L3 update suppressed: brief is not published", "draft_id", draftID)
+			return
+		}
+		if err != nil {
+			p.logger.Warn("L3 update suppressed: public projection failed", "draft_id", draftID, "error", err)
+			return
+		}
+		brief = brief.withPublicFields(fields, siteURL)
+	}
 	var lifecycle struct {
 		ClaimState string `yaml:"claim_state"`
 	}
@@ -128,9 +197,39 @@ func (p *Pipeline) maybeDispatchL3Update(ctx context.Context, draftID string, su
 	p.logger.Info("L3 update dispatched", "draft_id", draftID, "summary", summary)
 }
 
-// dispatchBriefFromDraftYAML builds the JSON payload entry by reading
-// the same fields the Site Deploy workflow's Python builder reads, so
-// the notifier sees a payload of the same shape regardless of caller.
+// UpdateNotification is the update payload one draft would send, with its
+// filterable fields taken from the published projection when the publisher
+// provides one (it always does in production).
+func UpdateNotification(draftYAML, summary, siteURL string, publisher BriefPublisher) (dispatchBrief, error) {
+	brief, err := dispatchBriefFromDraftYAML(draftYAML, summary, siteURL)
+	if err != nil {
+		return brief, err
+	}
+	if projector, ok := publisher.(notificationProjector); ok {
+		fields, err := projector.PublicNotificationFields(draftYAML)
+		if err != nil {
+			return brief, err
+		}
+		brief = brief.withPublicFields(fields, siteURL)
+	}
+	return brief, nil
+}
+
+// SendUpdateNotification posts one update notification. It is the operator
+// path for re-sending an update whose original dispatch was lost or wrong;
+// it bypasses the source allowlist and cooldown, which gate automatic merges.
+func SendUpdateNotification(ctx context.Context, notifierURL, token string, brief dispatchBrief) error {
+	if notifierURL == "" || token == "" {
+		return fmt.Errorf("notifier URL and dispatch token are required")
+	}
+	return postDispatch(ctx, notifierURL, token, dispatchPayload{Briefs: []dispatchBrief{brief}})
+}
+
+// dispatchBriefFromDraftYAML builds the JSON payload entry from a draft. It
+// reads public field names where present and the draft's internal names
+// (affected_vendors, affected_products, threat_actor) otherwise. The draft has
+// no public type: maybeDispatchL3Update replaces the filterable fields with
+// the publisher's projection whenever one is available.
 func dispatchBriefFromDraftYAML(briefYAML, summary, siteURL string) (dispatchBrief, error) {
 	var fm map[string]any
 	if err := yaml.Unmarshal([]byte(briefYAML), &fm); err != nil {
@@ -159,6 +258,19 @@ func dispatchBriefFromDraftYAML(briefYAML, summary, siteURL string) (dispatchBri
 		}
 	}
 	exploited, _ := fm["exploited"].(bool)
+	hasPOC, _ := fm["has_poc"].(bool)
+	firstList := func(keys ...string) []string {
+		for _, key := range keys {
+			if list := strList(key); len(list) > 0 {
+				return list
+			}
+		}
+		return nil
+	}
+	actors := strList("actors")
+	if actor := strings.TrimSpace(str("threat_actor")); len(actors) == 0 && actor != "" {
+		actors = []string{actor}
+	}
 	slug := str("slug")
 	url := siteURL
 	if url != "" && slug != "" {
@@ -171,11 +283,12 @@ func dispatchBriefFromDraftYAML(briefYAML, summary, siteURL string) (dispatchBri
 		URL:           url,
 		Type:          str("type"),
 		Severity:      severity,
-		Actors:        strList("actors"),
-		Vendors:       strList("vendors"),
-		Products:      strList("products"),
+		Actors:        actors,
+		Vendors:       firstList("vendors", "affected_vendors"),
+		Products:      firstList("products", "affected_products"),
 		Tags:          strList("tags"),
 		Exploited:     exploited,
+		HasPOC:        hasPOC,
 		IsUpdate:      true,
 		UpdateSummary: summary,
 	}, nil

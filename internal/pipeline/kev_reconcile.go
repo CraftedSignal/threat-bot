@@ -200,7 +200,9 @@ func reconcileExploitation(briefYAML string, catalog map[string]string) (out str
 		evidence = map[string]any{"status": "unknown"}
 		doc["exploitation_evidence"] = evidence
 		doc["exploited"] = false
-		doc["priority_signals"] = withoutSignal(doc["priority_signals"], "active_exploitation")
+		if signals, ok := doc["priority_signals"].([]any); ok {
+			doc["priority_signals"] = withoutSignal(signals, "active_exploitation")
+		}
 		corrected, changed = true, true
 	}
 	cves, _ := doc["cves"].([]any)
@@ -269,11 +271,7 @@ func citesExploitListing(briefYAML string) bool {
 	return false
 }
 
-func withoutSignal(raw any, signal string) any {
-	list, ok := raw.([]any)
-	if !ok {
-		return raw
-	}
+func withoutSignal(list []any, signal string) []any {
 	out := make([]any, 0, len(list))
 	for _, value := range list {
 		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), signal) {

@@ -267,6 +267,18 @@ func TestReconcileExploitationWithdrawsListingOnlyEvidence(t *testing.T) {
 	}
 }
 
+func TestReconcileExploitationDoesNotAddPrioritySignals(t *testing.T) {
+	brief := strings.Replace(kevReconcileBriefYAML, "exploitation_evidence:\n  status: unknown\n",
+		"exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://www.exploit-db.com/exploits/1\n", 1)
+	out, _, corrected, changed, err := reconcileExploitation(brief, map[string]string{"CVE-2099-0001": ""})
+	if err != nil || !changed || !corrected {
+		t.Fatalf("changed=%v corrected=%v err=%v", changed, corrected, err)
+	}
+	if strings.Contains(out, "priority_signals") {
+		t.Fatalf("correction added priority_signals:\n%s", out)
+	}
+}
+
 func TestExploitListingIsNeverExploitationEvidence(t *testing.T) {
 	for _, raw := range []string{"https://sploitus.com/exploit?id=X", "https://www.exploit-db.com/exploits/1", "https://packetstormsecurity.com/files/1"} {
 		if !ExploitCodeListingURL(raw) {

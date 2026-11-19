@@ -1033,17 +1033,6 @@ func TestPublishBriefMarkdownRecordsNewestPublicBrief(t *testing.T) {
 	assertNewest("2026-10-18T09:00:00Z", pushedC)
 }
 
-func TestPublicExploitationEvidenceWithdrawsExploitListing(t *testing.T) {
-	got := publicExploitationEvidence(BundleBrief{ExploitationEvidence: &BundleExploitationEvidence{Status: "confirmed_active", SourceURL: "https://sploitus.com/exploit?id=X"}})
-	if got.Status != "unknown" || got.SourceURL != "" {
-		t.Fatalf("republishing kept listing-only exploitation: %+v", got)
-	}
-	kept := publicExploitationEvidence(BundleBrief{ExploitationEvidence: &BundleExploitationEvidence{Status: "confirmed_active", SourceURL: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"}})
-	if kept.Status != "confirmed_active" {
-		t.Fatalf("real evidence withdrawn: %+v", kept)
-	}
-}
-
 func TestParseBriefYAMLDropsJunkClaimState(t *testing.T) {
 	for state, want := range map[string]string{"<nil>": "", "": "", "verified": "verified", "disputed": "disputed"} {
 		brief, err := ParseBriefYAML("id: b\nclaim_state: \"" + state + "\"\n")
@@ -1053,13 +1042,5 @@ func TestParseBriefYAMLDropsJunkClaimState(t *testing.T) {
 		if brief.ClaimState != want {
 			t.Errorf("claim_state %q published as %q, want %q", state, brief.ClaimState, want)
 		}
-	}
-}
-
-func TestPublicExploitationEvidenceKeepsListingClaimTheTextMakes(t *testing.T) {
-	evidence := &BundleExploitationEvidence{Status: "confirmed_active", SourceURL: "https://sploitus.com/exploit?id=X"}
-	got := publicExploitationEvidence(BundleBrief{Summary: "CVE-2026-1 is actively exploited in the wild.", ExploitationEvidence: evidence})
-	if got.Status != "confirmed_active" {
-		t.Fatalf("exploitation claimed by the text was withdrawn at publication: %+v", got)
 	}
 }

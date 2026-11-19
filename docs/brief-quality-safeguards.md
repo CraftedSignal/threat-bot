@@ -45,9 +45,12 @@ Scanning, lab research, predictions and a public exploit or proof of concept are
 not exploitation, and an exploit-code listing (for example sploitus or Exploit-DB)
 never evidences it. An hourly reconciliation marks approved briefs whose CVEs CISA
 lists in KEV as exploited, with the catalog as evidence, and withdraws a state
-whose only evidence is an exploit-code listing. Only listings from the last week
-send update notifications; a brief whose update fails the publication contract is
-left unchanged and reported for review.
+whose only evidence is an exploit-code listing, unless the brief's own text states
+exploitation: that brief is held for review instead. Exploitation wording is read
+per clause, so negated, hedged or conditional statements and detection guidance
+are not claims. Only listings from the last week send update notifications; a
+brief whose update fails the publication contract is left unchanged and reported
+for review.
 Rumour promotion requires pipeline-issued provenance; model JSON cannot mint it.
 Unverifiable publisher ownership or independence requires review.
 

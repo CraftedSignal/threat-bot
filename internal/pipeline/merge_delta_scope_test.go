@@ -159,15 +159,22 @@ func TestMergeDeltaGradesExploitationReplacingListingOnlyEvidence(t *testing.T) 
 
 // A chain is the claim that admits a CVE a single-vulnerability brief does not
 // list (cvesAccepted); grading only the admitted CVE let a made-up chain add an
-// unrelated CVE unchecked.
+// unrelated CVE unchecked. Admission follows connected chain groups, so every
+// group connected to the added CVE is graded and an unrelated one is not.
 func TestMergeDeltaGradesTheChainThatAdmitsANewCVE(t *testing.T) {
-	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-1", "CVE-2026-7"}, ChainedCVEs: [][]string{{"CVE-2026-1", "CVE-2026-7"}, {"CVE-2026-1", "CVE-2026-8"}}}
-	target := map[string]any{"cves": []any{map[string]any{"id": "CVE-2026-1"}}}
+	chains := [][]string{{"CVE-2026-1001", "CVE-2026-1007"}, {"CVE-2026-1001", "CVE-2026-1008"}, {"CVE-2026-2001", "CVE-2026-2002"}}
+	extraction := &ExtractionResult{CVEs: []string{"CVE-2026-1001", "CVE-2026-1007"}, ChainedCVEs: chains}
+	target := map[string]any{"cves": []any{map[string]any{"id": "CVE-2026-1001"}}}
 	delta := mergeAppliedDelta(scraper.RawItem{}, extraction, target, nil)
-	if strings.Join(delta.CVEs, ",") != "CVE-2026-7" || len(delta.ChainedCVEs) != 1 || strings.Join(delta.ChainedCVEs[0], ",") != "CVE-2026-1,CVE-2026-7" {
-		t.Fatalf("admitting chain not graded: %+v", delta)
+	if strings.Join(delta.CVEs, ",") != "CVE-2026-1007" || len(delta.ChainedCVEs) != 2 {
+		t.Fatalf("admitting chain groups not graded: %+v", delta)
 	}
-	if delta := mergeAppliedDelta(scraper.RawItem{}, &ExtractionResult{CVEs: []string{"CVE-2026-1"}, ChainedCVEs: extraction.ChainedCVEs}, target, nil); len(delta.ChainedCVEs) != 0 {
+	for _, chain := range delta.ChainedCVEs {
+		if chain[0] == "CVE-2026-2001" {
+			t.Fatalf("unrelated chain graded: %v", delta.ChainedCVEs)
+		}
+	}
+	if delta := mergeAppliedDelta(scraper.RawItem{}, &ExtractionResult{CVEs: []string{"CVE-2026-1001"}, ChainedCVEs: chains}, target, nil); len(delta.ChainedCVEs) != 0 {
 		t.Fatalf("chains graded although no CVE is added: %+v", delta)
 	}
 }
@@ -182,5 +189,51 @@ func TestMergeStringListTreatsCVEEntriesAsPresent(t *testing.T) {
 	}
 	if !mergeStringList(fm, "cves", []string{"CVE-2026-2"}) || len(fm["cves"].([]any)) != 2 {
 		t.Fatalf("new CVE not appended: %v", fm["cves"])
+	}
+}
+
+// Admission follows chains transitively across groups, so a made-up group
+// that connects an added CVE to the brief's CVE must be graded even when it
+// does not name the added CVE itself.
+func TestMergeDeltaGradesTransitiveChains(t *testing.T) {
+	extraction := &ExtractionResult{
+		CVEs:        []string{"CVE-2026-98432"},
+		ChainedCVEs: [][]string{{"CVE-2026-98432", "CVE-2026-11111"}, {"CVE-2026-11111", "CVE-2024-0582"}, {"CVE-2026-5", "CVE-2026-6"}},
+	}
+	target := map[string]any{"cves": []any{map[string]any{"id": "CVE-2024-0582"}}}
+	delta := mergeAppliedDelta(scraper.RawItem{}, extraction, target, nil)
+	if len(delta.ChainedCVEs) != 2 {
+		t.Fatalf("connecting chain groups not graded: %v", delta.ChainedCVEs)
+	}
+	for _, chain := range delta.ChainedCVEs {
+		if strings.Join(chain, ",") == "CVE-2026-5,CVE-2026-6" {
+			t.Fatalf("unrelated chain graded: %v", delta.ChainedCVEs)
+		}
+	}
+}
+
+// A scoped delta leaves out vendors the target already lists. Provenance must
+// still judge the source's ownership against them: an Oracle advisory on a
+// brief listing Oracle is the vendor's own primary evidence.
+func TestMergeDeltaProvenanceUsesTheTargetVendors(t *testing.T) {
+	item := scraper.RawItem{SourceID: "oracle:advisory", Source: "oracle", URL: "https://www.oracle.com/security-alerts/alert-cve-2026-1.html",
+		Title: "Oracle Security Alert CVE-2026-1", Content: "Oracle confirms the flaw affects Java SE 21 and 25."}
+	checker := NewGroundingChecker(referenceTestLLM{respond: func(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+		*out.(*groundingReport) = groundingReport{}
+		return nil
+	}}).WithLogger(quietLogger())
+	grade := func(vendors ...string) *ClaimEvidenceProvenance {
+		extraction := &ExtractionResult{AffectedProducts: []string{"Java SE"}, ClaimAssessment: &ClaimAssessment{Claim: "affects Java SE", Status: "unverified",
+			Evidence: []ClaimEvidence{{Type: "authoritative_primary", Detail: "Oracle confirms the flaw affects Java SE 21 and 25.", SourceURL: item.URL}}}}
+		if _, err := checker.CheckMergeDelta(context.Background(), item, extraction, vendors...); err != nil {
+			t.Fatal(err)
+		}
+		return extraction.ClaimAssessment.Evidence[0].Provenance
+	}
+	if p := grade(); p == nil || p.TrustedPrimary {
+		t.Fatalf("without the target's vendors the source must not be trusted primary: %+v", p)
+	}
+	if p := grade("Oracle"); p == nil || !p.TrustedPrimary {
+		t.Fatalf("the vendor's own advisory lost trusted-primary status: %+v", p)
 	}
 }

@@ -1223,12 +1223,22 @@ func BuildCVEContext(item scraper.RawItem, extraction *ExtractionResult) CVECont
 // looks for, not what was observed, so attempt wording counts only outside it;
 // otherwise a Sigma rule would mark the CVE exploited and a later genuine
 // report would no longer route as an update.
+//
+// Each term counts only where it is stated as fact (statedInText): "not
+// actively exploited" and "not aware of any exploitation attempts" once
+// marked a CVE exploited, which made a later genuine report skip as a
+// duplicate instead of routing as an update.
 func exploitationReported(item scraper.RawItem, lowerText string) bool {
-	if containsAny(lowerText, activeExploitTerms) {
+	if statedInText(lowerText, activeExploitTermPatterns) {
 		return true
 	}
-	return !isDetectionContent(item) && containsAny(lowerText, exploitAttemptTerms)
+	return !isDetectionContent(item) && statedInText(lowerText, exploitAttemptTermPatterns)
 }
+
+var (
+	activeExploitTermPatterns  = termPatterns(activeExploitTerms)
+	exploitAttemptTermPatterns = termPatterns(exploitAttemptTerms)
+)
 
 // isDetectionContent reports whether an item is a detection rule.
 func isDetectionContent(item scraper.RawItem) bool {

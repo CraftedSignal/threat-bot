@@ -309,17 +309,6 @@ func briefTextClaimsExploitation(doc map[string]any) bool {
 	return TextClaimsExploitation(prose...)
 }
 
-// TextClaimsExploitation reports whether prose says something is exploited,
-// or targeted by exploitation attempts, in the wild, unnegated.
-func TextClaimsExploitation(prose ...string) bool {
-	text := strings.Join(prose, "\n")
-	if negatedExploitationRe.MatchString(text) {
-		return false
-	}
-	lower := strings.ToLower(text)
-	return containsAny(lower, activeExploitTerms) || containsAny(lower, exploitAttemptTerms)
-}
-
 func confirmedEvidence(evidence map[string]any) bool {
 	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(evidence["status"])), "confirmed_active")
 }

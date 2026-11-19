@@ -164,20 +164,25 @@ func addedIOCsByMerge(probe map[string]any, iocs []ExtractedIOC) []ExtractedIOC 
 	return out
 }
 
-// chainsAdmitting returns the chain groups that contain an added CVE: the
-// claim that admits a CVE a single-vulnerability brief did not list.
+// chainsAdmitting returns the chain groups that admit an added CVE to a
+// single-vulnerability brief. Admission follows chains transitively across
+// groups (cveChains), so every group connected to an added CVE is graded,
+// not only those naming it.
 func chainsAdmitting(chains [][]string, added []string) [][]string {
-	if len(added) == 0 {
+	if len(added) == 0 || len(chains) == 0 {
 		return nil
 	}
-	want := map[string]bool{}
+	set := cveChains(chains)
+	roots := map[string]bool{}
 	for _, id := range added {
-		want[strings.ToUpper(strings.TrimSpace(id))] = true
+		if root, ok := set[normalizeCVEID(id)]; ok {
+			roots[root] = true
+		}
 	}
 	var out [][]string
 	for _, chain := range chains {
 		for _, id := range chain {
-			if want[strings.ToUpper(strings.TrimSpace(id))] {
+			if root, ok := set[normalizeCVEID(id)]; ok && roots[root] {
 				out = append(out, append([]string(nil), chain...))
 				break
 			}

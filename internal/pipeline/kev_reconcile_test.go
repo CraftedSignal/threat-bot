@@ -299,3 +299,28 @@ func TestExploitListingIsNeverExploitationEvidence(t *testing.T) {
 		t.Fatal("an exploit tracker merge recorded exploitation")
 	}
 }
+
+// Exploitation news reached subscribers only from a short list of vendor
+// sources, so Java4Shell's attempts (reported by SecurityWeek and GreyNoise)
+// could never notify. Unlisted sources stay suppressed.
+func TestL3UpdateDispatchAllowsExploitationReporters(t *testing.T) {
+	for source, want := range map[string]int{"greynoise": 1, "securityweek": 1, "the-hacker-news": 1, "reddit": 0, "sploitus": 0} {
+		t.Run(source, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			if err := db.CreateDraft(&storage.Draft{ID: "d", Status: storage.StatusApproved, Source: "nvd", BriefYAML: strings.Replace(kevReconcileBriefYAML, "exploitation_evidence:\n  status: unknown\n", "exploited: true\n", 1), CreatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			var dispatched recordedDispatch
+			server := dispatched.server(t)
+			defer server.Close()
+			p := kevReconcilePipeline(t, db, kevTestCatalog(t, map[string]string{"CVE-2099-0001": ""}), server.URL)
+			p.maybeDispatchL3Update(context.Background(), "d", "exploited:true", source, p.siteURL)
+			dispatched.mu.Lock()
+			defer dispatched.mu.Unlock()
+			if len(dispatched.posts) != want {
+				t.Fatalf("%s: %d dispatches, want %d", source, len(dispatched.posts), want)
+			}
+		})
+	}
+}

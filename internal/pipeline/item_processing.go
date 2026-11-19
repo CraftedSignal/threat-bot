@@ -88,7 +88,12 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			if p.processingKey(item) == state.EvidenceKey && targetMatches {
 				if state.GroundingFailure != nil {
 					if err := p.refreshHeldGroundingEvidence(ctx, state); err != nil {
-						return err
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							return ctxErr
+						}
+						// The primary record is unavailable, not changed: keep
+						// the hold and retry after the source outage delay.
+						return p.deferSourceRefresh(*cp, state, key, err)
 					}
 					if !p.groundingFailureHeld(state) {
 						if err := p.db.ClearGroundingAttempts(item.SourceID); err != nil {

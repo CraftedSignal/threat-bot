@@ -102,6 +102,16 @@ func (d *DB) NextIngestionCandidates(limit int) ([]IngestionCandidate, error) {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// A source has one current state: its most recently observed revision.
+	// Older queued observations are superseded. Delivering them after the
+	// current one would rebuild the candidate from stale evidence, and held
+	// candidates would rebuild on every rotation between their revisions.
+	// julianday has millisecond precision; insertion order breaks ties. This
+	// runs before completed revisions leave the queue, so completing the
+	// current revision cannot resurrect an older one.
+	if _, err = tx.Exec(`DELETE FROM ingestion_candidates WHERE EXISTS (SELECT 1 FROM ingestion_candidates newer WHERE newer.source_id=ingestion_candidates.source_id AND (julianday(newer.queued_at)>julianday(ingestion_candidates.queued_at) OR (julianday(newer.queued_at)=julianday(ingestion_candidates.queued_at) AND newer.rowid>ingestion_candidates.rowid)))`); err != nil {
+		return nil, err
+	}
 	if _, err = tx.Exec(`DELETE FROM ingestion_candidates WHERE EXISTS (SELECT 1 FROM seen_items s JOIN seen_revisions r USING(source_id) WHERE s.source_id=ingestion_candidates.source_id AND r.revision=ingestion_candidates.revision)`); err != nil {
 		return nil, err
 	}

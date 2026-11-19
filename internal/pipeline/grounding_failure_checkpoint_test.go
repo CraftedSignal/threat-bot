@@ -163,8 +163,25 @@ func TestGroundingContractHoldRefreshesPrimaryEvidenceBeforeResume(t *testing.T)
 			if mode == "changed" && (checks != 2 || !errors.As(err, &contract)) {
 				t.Fatalf("changed primary evidence failed to reopen bounded check: calls=%d err=%v", checks, err)
 			}
-			if (mode == "outage" || mode == "cna outage") && (err == nil || checks != 1) {
-				t.Fatalf("primary outage consumed paid retry instead of retaining hold: calls=%d err=%v", checks, err)
+			if mode == "outage" || mode == "cna outage" {
+				// An outage is not changed evidence: no paid retry, the hold
+				// stays, and the refresh waits for a durable deadline.
+				if err != nil || checks != 1 {
+					t.Fatalf("primary outage consumed paid retry instead of deferring the hold: calls=%d err=%v", checks, err)
+				}
+				cp, cpErr := db.GetProcessingCheckpoint(item.SourceID)
+				if cpErr != nil || cp == nil {
+					t.Fatalf("held candidate lost: %v", cpErr)
+				}
+				var held processingCandidate
+				if err := yaml.Unmarshal([]byte(cp.Payload), &held); err != nil {
+					t.Fatal(err)
+				}
+				// This configuration disables delays, so only the recorded
+				// deadline is checked, not that it is still in the future.
+				if _, recorded := held.RefreshRetries[restarted.processingInputKey(item)]; held.GroundingFailure == nil || !recorded {
+					t.Fatal("primary outage dropped the hold or its durable refresh deadline")
+				}
 			}
 			if seen, _ := db.HasSeen(item.SourceID); seen {
 				t.Fatal("primary refresh consumed held source")

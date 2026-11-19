@@ -36,6 +36,9 @@ type CVEMeta struct {
 	CNAGap         string // Explicit coverage uncertainty, never evidence that no fix exists.
 	CNAChecked     bool
 	CNAUnavailable bool // Supplemental transport failure; cannot invalidate a held checker input.
+	// CNAAffectedIncomplete records that size limits dropped affected entries
+	// from CNAFacts, so the retained entries cannot render complete scope.
+	CNAAffectedIncomplete bool
 	// SourceIdentifier is NVD's sourceIdentifier (the CNA / submitter, e.g.
 	// security@android.com).
 	SourceIdentifier string
@@ -486,8 +489,22 @@ func (v *CVEVerifier) checkCVEProgram(ctx context.Context, id string) (*CVEMeta,
 	meta.CNAChecked = true
 	if meta.Exists {
 		meta.CNAFacts, meta.CNAGap = record.Containers.CNA.sourceFacts(id)
+		meta.CNAAffectedIncomplete = record.Containers.CNA.affectedFactsIncomplete(id, meta.CNAFacts)
 	}
 	return meta, nil
+}
+
+// affectedFactsIncomplete reports whether size limits dropped any of the
+// record's affected entries from the retained facts. Then no product's
+// affected versions can be rendered as complete from those facts.
+func (record cnaSourceRecord) affectedFactsIncomplete(id string, facts []cnaSourceFact) bool {
+	retained := 0
+	for _, fact := range facts {
+		if fact.CVEID == id && fact.Kind == "affected" {
+			retained++
+		}
+	}
+	return retained < len(record.Affected)
 }
 
 // Supplement a verified NVD identity with the CNA fields NVD's metadata model
@@ -534,7 +551,7 @@ func (v *CVEVerifier) supplementCNA(ctx context.Context, id string) (*CVEMeta, e
 			// out of it while retaining explicit uncertainty about coverage.
 			updated.CNAGap = "unknown: CNA affected, remediation and prerequisite coverage unavailable"
 		case primary.Exists:
-			updated.CNAFacts, updated.CNAGap = primary.CNAFacts, primary.CNAGap
+			updated.CNAFacts, updated.CNAGap, updated.CNAAffectedIncomplete = primary.CNAFacts, primary.CNAGap, primary.CNAAffectedIncomplete
 		case primary.Verification.Status == "rejected" || primary.Verification.Status == "reserved":
 			// An explicit primary identity contradiction is not an outage.
 			updated.Exists = false
@@ -572,6 +589,7 @@ func (v *CVEVerifier) supplementCNA(ctx context.Context, id string) (*CVEMeta, e
 
 func copyCNAEvidence(target, source *CVEMeta) {
 	target.CNAFacts, target.CNAGap, target.CNAChecked, target.CNAUnavailable = source.CNAFacts, source.CNAGap, source.CNAChecked, source.CNAUnavailable
+	target.CNAAffectedIncomplete = source.CNAAffectedIncomplete
 	if !source.Exists && (source.Verification.Status == "rejected" || source.Verification.Status == "reserved") {
 		target.Exists, target.Verification = false, source.Verification
 	}

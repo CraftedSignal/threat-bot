@@ -90,7 +90,7 @@ func TestValidatorCanonicalizesMarketplaceProductWithoutLosingRange(t *testing.T
 
 func TestSourceInclusiveVersionRangeSurvivesWithoutNVDEnrichment(t *testing.T) {
 	raw := "affected_products: [FixtureMedia]\n"
-	got := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd", Content: fixtureRegistryDescription})
+	got := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd", Content: fixtureRegistryDescription}, primaryRecordFacts{})
 	if !strings.Contains(got, "FixtureMedia (<= 4.2.19)") {
 		t.Fatalf("source range missing: %s", got)
 	}

@@ -73,28 +73,102 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 	return result, nil
 }
 
-// mergeAppliedDelta returns the part of an extraction a merge can write to its
-// target, for CheckMergeDelta. unionIntoDraft never writes summary, platforms,
-// tactics, techniques, vuln_class or chained CVEs, so grounding them only held
-// merges for claims nobody would publish: from 2026-11-17 to 11-19, 3,518 of
-// 4,327 merge holds cited nothing else. Actor and exploitation use the same
-// predicates unionIntoDraft applies, and a claim assessment only feeds a rumour
-// lifecycle the target already has. The claim assessment stays shared with the
-// extraction, so provenance granted by the check still reaches the lifecycle.
-func mergeAppliedDelta(item scraper.RawItem, extraction *ExtractionResult, liveLifecycle bool) *ExtractionResult {
+// mergeAppliedDelta returns what a merge would change in its target, for
+// CheckMergeDelta. unionIntoDraft never writes summary, platforms, tactics,
+// techniques, vuln_class or chained CVEs, so grounding them only held merges
+// for claims nobody would publish: from 2026-11-17 to 11-19, 3,518 of 4,327
+// merge holds cited nothing else. Values the target already holds are not
+// written again, so a dispute about them (Talos questioning the Oracle vendor
+// a Java4Shell brief already listed) must not block what the source adds.
+// Actor and exploitation use the predicates unionIntoDraft applies, and a
+// claim assessment only feeds a rumour lifecycle the target already has. The
+// claim assessment stays shared with the extraction, so provenance granted
+// by the check still reaches the lifecycle merge.
+func mergeAppliedDelta(item scraper.RawItem, extraction *ExtractionResult, target map[string]any) *ExtractionResult {
 	delta := cloneExtraction(extraction)
 	delta.Tactics, delta.Techniques, delta.Platforms, delta.ChainedCVEs = nil, nil, nil, nil
 	delta.Summary, delta.VulnClass = "", ""
-	if !mergeAppliesActor(item, extraction) {
+	delta.CVEs = withoutTargetValues(delta.CVEs, targetCVEIDs(target), strings.ToUpper)
+	for _, field := range []struct {
+		key    string
+		values *[]string
+	}{{"affected_vendors", &delta.AffectedVendors}, {"affected_products", &delta.AffectedProducts}, {"affected_os", &delta.AffectedOS}} {
+		*field.values = withoutTargetValues(*field.values, targetStringSet(target, field.key), strings.ToLower)
+	}
+	delta.IOCs = withoutTargetIOCs(delta.IOCs, target)
+	if !mergeAppliesActor(item, extraction) || !yamlValueEmpty(target["threat_actor"]) {
 		delta.ThreatActor = ""
 	}
-	if !mergeAppliesExploitation(item, extraction) {
+	evidence, _ := asStringMap(target["exploitation_evidence"])
+	if !mergeAppliesExploitation(item, extraction) || confirmedEvidence(evidence) {
 		delta.ActiveExploitation, delta.ExploitationEvidence = false, ""
 	}
-	if !liveLifecycle {
+	if !rumourLifecycleActive(target) {
 		delta.ClaimAssessment = nil
 	}
 	return delta
+}
+
+// withoutTargetValues drops values the target already holds, compared the
+// way mergeStringList compares them.
+func withoutTargetValues(values []string, present map[string]bool, norm func(string) string) []string {
+	var out []string
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" && !present[norm(trimmed)] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func targetStringSet(target map[string]any, key string) map[string]bool {
+	set := map[string]bool{}
+	list, _ := target[key].([]any)
+	for _, entry := range list {
+		if value, ok := entry.(string); ok {
+			set[strings.ToLower(strings.TrimSpace(value))] = true
+		}
+	}
+	return set
+}
+
+// targetCVEIDs returns the CVE IDs a brief lists, as bare IDs or entries.
+func targetCVEIDs(target map[string]any) map[string]bool {
+	set := map[string]bool{}
+	list, _ := target["cves"].([]any)
+	for _, entry := range list {
+		id, _ := entry.(string)
+		if m, ok := asStringMap(entry); ok {
+			id, _ = m["id"].(string)
+		}
+		if id = strings.ToUpper(strings.TrimSpace(id)); id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// withoutTargetIOCs drops IOCs the target already holds, keyed the way
+// mergeIOCList keys them.
+func withoutTargetIOCs(iocs []ExtractedIOC, target map[string]any) []ExtractedIOC {
+	key := func(kind, value string) string {
+		return strings.ToLower(strings.TrimSpace(kind)) + "|" + strings.TrimSpace(value)
+	}
+	present := map[string]bool{}
+	list, _ := target["iocs"].([]any)
+	for _, entry := range list {
+		m, _ := entry.(map[string]any)
+		kind, _ := m["type"].(string)
+		value, _ := m["value"].(string)
+		present[key(kind, value)] = true
+	}
+	var out []ExtractedIOC
+	for _, ioc := range iocs {
+		if !present[key(ioc.Type, ioc.Value)] {
+			out = append(out, ioc)
+		}
+	}
+	return out
 }
 
 // mergeAppliesActor reports whether a merge records the extraction's actor:

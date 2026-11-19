@@ -38,7 +38,7 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 		ClaimAssessment:      &ClaimAssessment{Claim: "pre-auth RCE", Status: "unverified", Likelihood: "likely"},
 	}
 
-	result, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, false))
+	result, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, map[string]any{}))
 	if err != nil || !result.Grounded {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -69,7 +69,7 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 	extraction.ActiveExploitation = true
 	item.Content += " Researchers expect attacks soon."
 	prompts = nil
-	if _, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, true)); err != nil {
+	if _, err := checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, extraction, map[string]any{"claim_state": "reported"})); err != nil {
 		t.Fatal(err)
 	}
 	for _, kept := range []string{"active_exploitation: true", "exploitation_evidence: researchers expect attacks", "claim_assessment:"} {
@@ -80,7 +80,7 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 
 	// Nothing to apply means nothing to pay for.
 	prompts = nil
-	result, err = checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, &ExtractionResult{Summary: "context only", Platforms: []string{"linux"}}, false))
+	result, err = checker.CheckMergeDelta(context.Background(), item, mergeAppliedDelta(item, &ExtractionResult{Summary: "context only", Platforms: []string{"linux"}}, map[string]any{}))
 	if err != nil || !result.Grounded || len(prompts) != 0 {
 		t.Fatalf("empty delta: result=%+v err=%v calls=%d", result, err, len(prompts))
 	}
@@ -90,7 +90,45 @@ func TestMergeDeltaGroundsOnlyAppliedFields(t *testing.T) {
 // lifecycle merge, which reads the caller's extraction.
 func TestMergeAppliedDeltaSharesClaimAssessment(t *testing.T) {
 	extraction := &ExtractionResult{ClaimAssessment: &ClaimAssessment{Claim: "x"}}
-	if got := mergeAppliedDelta(scraper.RawItem{}, extraction, true); got.ClaimAssessment != extraction.ClaimAssessment {
+	if got := mergeAppliedDelta(scraper.RawItem{}, extraction, map[string]any{"claim_state": "reported"}); got.ClaimAssessment != extraction.ClaimAssessment {
 		t.Fatal("claim assessment copied: granted provenance would be lost")
+	}
+}
+
+// A value the target already holds is not written again, so it is not graded.
+// Talos's Java4Shell merge was held for questioning the Oracle vendor the
+// brief already listed, which also blocked everything else the source added.
+func TestMergeDeltaSkipsValuesTheTargetAlreadyHolds(t *testing.T) {
+	item := scraper.RawItem{URL: "https://news.example/a", Title: "Java4Shell attacks", Content: "Attackers are exploiting CVE-2026-114938. Storm-1 is behind it."}
+	extraction := &ExtractionResult{
+		CVEs:                 []string{"cve-2026-114938", "CVE-2026-1"},
+		AffectedVendors:      []string{" oracle ", "Red Hat"},
+		AffectedProducts:     []string{"OpenJDK"},
+		IOCs:                 []ExtractedIOC{{Type: "ip", Value: "198.51.100.7"}, {Type: "IP", Value: "203.0.113.9"}},
+		ThreatActor:          "Storm-1",
+		ActiveExploitation:   true,
+		ExploitationEvidence: "Attackers are exploiting CVE-2026-114938.",
+	}
+	target := map[string]any{
+		"cves":             []any{map[string]any{"id": "CVE-2026-114938"}},
+		"affected_vendors": []any{"Oracle"},
+		"iocs":             []any{map[string]any{"type": "ip", "value": "203.0.113.9"}},
+	}
+	delta := mergeAppliedDelta(item, extraction, target)
+	if strings.Join(delta.CVEs, ",") != "CVE-2026-1" || strings.Join(delta.AffectedVendors, ",") != "Red Hat" || strings.Join(delta.AffectedProducts, ",") != "OpenJDK" {
+		t.Fatalf("held values not dropped: %+v", delta)
+	}
+	if len(delta.IOCs) != 1 || delta.IOCs[0].Value != "198.51.100.7" {
+		t.Fatalf("held IOC not dropped: %+v", delta.IOCs)
+	}
+	if delta.ThreatActor != "Storm-1" || !delta.ActiveExploitation {
+		t.Fatalf("new actor or exploitation dropped: %+v", delta)
+	}
+
+	target["threat_actor"] = "Storm-2"
+	target["exploitation_evidence"] = map[string]any{"status": "confirmed_active", "source_url": "https://cisa.example/kev"}
+	delta = mergeAppliedDelta(item, extraction, target)
+	if delta.ThreatActor != "" || delta.ActiveExploitation || delta.ExploitationEvidence != "" {
+		t.Fatalf("claims the merge cannot write were kept: %+v", delta)
 	}
 }

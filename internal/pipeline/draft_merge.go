@@ -324,7 +324,7 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 	}
 
 	// Ground exactly what this merge can write, nothing it discards.
-	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, mergeAppliedDelta(item, extraction, rumourLifecycleActive(fm)))
+	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, mergeAppliedDelta(item, extraction, fm))
 	if err != nil {
 		return fmt.Errorf("%w: incoming claims could not be verified: %w", errMergeRelevanceUnavailable, err)
 	}

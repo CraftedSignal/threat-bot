@@ -23,6 +23,7 @@ const (
 	recordLoadMaster = `{"vendor":"Progress Software","product":"LoadMaster","defaultStatus":"affected","platforms":["Linux"],"versions":[{"lessThan":"7.2.48.10","status":"affected","version":"7.2.48.1","versionType":"semver"},{"lessThan":"7.2.54.8","status":"affected","version":"7.2.54.0","versionType":"semver"}]}`
 	recordZammad     = `{"vendor":"Zammad GmbH","product":"Zammad","defaultStatus":"unaffected","platforms":["Linux","Docker"],"versions":[{"lessThan":"6.3.0","status":"unknown","version":"*","versionType":"semver"},{"lessThan":"6.5.4","status":"affected","version":"6.3.0","versionType":"semver"},{"lessThan":"7.1.3","status":"unknown","version":"7.0.0","versionType":"semver"}]}`
 	recordELEX       = `{"vendor":"Elextensions","product":"ELEX WordPress HelpDesk","packageName":"elex-helpdesk-customer-support-ticket-system","defaultStatus":"unaffected","versions":[{"version":"0","versionType":"custom","status":"affected","lessThanOrEqual":"3.3.9","changes":[{"at":"3.4.0","status":"unaffected"}]}]}`
+	recordNGINX      = `{"vendor":"F5","product":"NGINX Open Source","defaultStatus":"unknown","versions":[{"lessThan":"1.31.9","status":"affected","version":"1.31.0","versionType":"semver"},{"lessThan":"1.30.7","status":"affected","version":"1.30.0","versionType":"semver"},{"lessThan":"*","status":"affected","version":"1.19.7","versionType":"custom"}]}`
 	recordFAZ        = `{"vendor":"Fortinet","product":"FortiAnalyzer","defaultStatus":"unaffected","versions":[{"versionType":"semver","version":"8.0.0","lessThanOrEqual":"8.0.1","status":"affected"},{"versionType":"semver","version":"7.6.0","lessThanOrEqual":"7.6.7","status":"affected"}]}`
 	recordFAZCloud   = `{"vendor":"Fortinet","product":"FortiAnalyzer Cloud","defaultStatus":"unaffected","versions":[{"version":"8.0.1","status":"affected"},{"versionType":"semver","version":"7.6.0","lessThanOrEqual":"7.6.7","status":"affected"}]}`
 )
@@ -49,6 +50,8 @@ func TestPrimaryRecordRangesRenderEveryStatedRange(t *testing.T) {
 		"branch per line":      {"PrestaShop", recordPrestaShop, []string{"PrestaShop (< 8.2.9)", "PrestaShop (>= 9.0.0, < 9.2.1)"}},
 		"single bounded range": {"Office Online Server", recordOfficeOS, []string{"Office Online Server (>= 16.0.0.0, < 16.0.10417.20236)"}},
 		"inclusive bounds":     {"FortiAnalyzer", recordFAZ, []string{"FortiAnalyzer (>= 8.0.0, <= 8.0.1)", "FortiAnalyzer (>= 7.6.0, <= 7.6.7)"}},
+		// CVE-2026-123633 as F5 published it on 2026-11-18.
+		"unbounded upper limit": {"NGINX Open Source", recordNGINX, []string{"NGINX Open Source (>= 1.31.0, < 1.31.9)", "NGINX Open Source (>= 1.30.0, < 1.30.7)", "NGINX Open Source (>= 1.19.7)"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			brief := "affected_products:\n  - " + tc.product + "\n"
@@ -81,6 +84,7 @@ func TestPrimaryRecordRangesLeaveInterpretationToReview(t *testing.T) {
 		"wildcard bound":                   {"Widget", `{"product":"Widget","versions":[{"version":"2.0","lessThan":"2.*","status":"affected"}]}`},
 		"unaffected carve-out":             {"Widget", `{"product":"Widget","versions":[{"version":"0","lessThan":"3.0","status":"affected"},{"version":"2.5","status":"unaffected"}]}`},
 		"open start without a bound":       {"Widget", `{"product":"Widget","versions":[{"version":"0","status":"affected"}]}`},
+		"every version":                    {"Widget", `{"product":"Widget","versions":[{"version":"0","lessThan":"*","status":"affected"}]}`},
 		"both upper bounds":                {"Widget", `{"product":"Widget","versions":[{"version":"1.0","lessThan":"2.0","lessThanOrEqual":"2.0","status":"affected"}]}`},
 		"no versions":                      {"Widget", `{"product":"Widget","defaultStatus":"unaffected"}`},
 		"record text that is not an entry": {"Widget", `not json`},

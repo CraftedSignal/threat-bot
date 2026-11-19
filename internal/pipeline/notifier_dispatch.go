@@ -36,6 +36,9 @@ var l3SourceAllowlist = map[string]struct{}{
 	"crowdstrike":            {},
 	"microsoft-threat-intel": {},
 	"google-project-zero":    {},
+	// First-party sensor telemetry: the primary public source for observed
+	// exploitation attempts, which CISA KEV counts as exploitation.
+	"greynoise": {},
 }
 
 // dispatchPayload mirrors the feed-notifier /dispatch wire format. We

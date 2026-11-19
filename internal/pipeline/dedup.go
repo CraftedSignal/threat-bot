@@ -73,6 +73,9 @@ var (
 		"actively exploited", "exploitation in the wild", "wild exploitation",
 		"active exploitation", "observed in attacks", "used in attacks",
 		"zero-day", "0-day", "under active attack",
+		"exploitation attempts", "exploitation attempt", "exploit attempts",
+		"attempted exploitation", "attempts to exploit", "attempting to exploit",
+		"exploit-shaped", "in-the-wild exploitation",
 	}
 	severityTerms = []string{
 		"critical", "severity upgrade", "cvss upgraded", "severity escalation",

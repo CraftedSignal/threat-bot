@@ -323,7 +323,8 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 		extraction = sanitizeCampaignExtraction(extraction)
 	}
 
-	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, extraction)
+	// Ground exactly what this merge can write, nothing it discards.
+	delta, err := p.grounding.CheckMergeDelta(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "merge_delta_grounding"}), item, mergeAppliedDelta(item, extraction, rumourLifecycleActive(fm)))
 	if err != nil {
 		return fmt.Errorf("%w: incoming claims could not be verified: %w", errMergeRelevanceUnavailable, err)
 	}
@@ -351,14 +352,11 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 	addedIOCs := mergeIOCList(fm, extraction.IOCs)
 	actorChanged := false
 	actor := strings.TrimSpace(extraction.ThreatActor)
-	itemText := strings.ToLower(item.Title + " " + item.Content)
-	if !item.CorroborationOnly && actor != "" && strings.Contains(itemText, strings.ToLower(actor)) {
+	if mergeAppliesActor(item, extraction) {
 		actorChanged = mergeScalarIfMissing(fm, map[string]any{"threat_actor": actor}, "threat_actor")
 	}
 	exploitationChanged := false
-	evidence := strings.TrimSpace(extraction.ExploitationEvidence)
-	if !item.CorroborationOnly && extraction.ActiveExploitation && evidence != "" && validSourceURL(item.URL) &&
-		strings.Contains(itemText, strings.ToLower(evidence)) {
+	if mergeAppliesExploitation(item, extraction) {
 		observedAt := ""
 		if !item.PublishedAt.IsZero() {
 			observedAt = item.PublishedAt.UTC().Format(time.RFC3339)

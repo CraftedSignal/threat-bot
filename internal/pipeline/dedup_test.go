@@ -200,6 +200,19 @@ func TestEvaluateCVEOverlap(t *testing.T) {
 			},
 			expect: DedupUpdate,
 		},
+		{
+			// CISA KEV counts attempted exploitation. GreyNoise's Java4Shell
+			// report was skipped as a duplicate on 2026-11-18 because no
+			// update term matched its wording.
+			name: "observed exploitation attempts → update",
+			item: scraper.RawItem{
+				SourceID: "greynoise:java4shell",
+				Source:   "greynoise",
+				Title:    "Global Event: CVE-2026-1234 Live Activity Report",
+				Content:  "GreyNoise is monitoring scanning and exploitation attempts against CVE-2026-1234.",
+			},
+			expect: DedupUpdate,
+		},
 	}
 
 	for _, tt := range tests {

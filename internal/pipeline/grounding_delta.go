@@ -35,6 +35,12 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 	if err := json.Unmarshal(encoded, &delta); err != nil {
 		return nil, err
 	}
+	// An empty field asserts nothing. Sent anyway, the checker reports it as
+	// the brief omitting a source fact, which an incoming merge never claims.
+	pruneEmptyDelta(delta)
+	if len(delta) == 0 {
+		return &GroundingResult{Grounded: true}, nil
+	}
 	rendered, err := yaml.Marshal(delta)
 	if err != nil {
 		return nil, err
@@ -65,6 +71,73 @@ func (g *GroundingChecker) CheckMergeDelta(ctx context.Context, item scraper.Raw
 		}
 	}
 	return result, nil
+}
+
+// mergeAppliedDelta returns the part of an extraction a merge can write to its
+// target, for CheckMergeDelta. unionIntoDraft never writes summary, platforms,
+// tactics, techniques, vuln_class or chained CVEs, so grounding them only held
+// merges for claims nobody would publish: from 2026-11-17 to 11-19, 3,518 of
+// 4,327 merge holds cited nothing else. Actor and exploitation use the same
+// predicates unionIntoDraft applies, and a claim assessment only feeds a rumour
+// lifecycle the target already has. The claim assessment stays shared with the
+// extraction, so provenance granted by the check still reaches the lifecycle.
+func mergeAppliedDelta(item scraper.RawItem, extraction *ExtractionResult, liveLifecycle bool) *ExtractionResult {
+	delta := cloneExtraction(extraction)
+	delta.Tactics, delta.Techniques, delta.Platforms, delta.ChainedCVEs = nil, nil, nil, nil
+	delta.Summary, delta.VulnClass = "", ""
+	if !mergeAppliesActor(item, extraction) {
+		delta.ThreatActor = ""
+	}
+	if !mergeAppliesExploitation(item, extraction) {
+		delta.ActiveExploitation, delta.ExploitationEvidence = false, ""
+	}
+	if !liveLifecycle {
+		delta.ClaimAssessment = nil
+	}
+	return delta
+}
+
+// mergeAppliesActor reports whether a merge records the extraction's actor:
+// only a named actor the source itself mentions.
+func mergeAppliesActor(item scraper.RawItem, extraction *ExtractionResult) bool {
+	actor := strings.ToLower(strings.TrimSpace(extraction.ThreatActor))
+	return !item.CorroborationOnly && actor != "" && strings.Contains(strings.ToLower(item.Title+" "+item.Content), actor)
+}
+
+// mergeAppliesExploitation reports whether a merge records exploitation: only
+// when the source asserts it with a quoted excerpt at a citable URL. An exploit
+// tracker lists code, which is never exploitation evidence.
+func mergeAppliesExploitation(item scraper.RawItem, extraction *ExtractionResult) bool {
+	evidence := strings.ToLower(strings.TrimSpace(extraction.ExploitationEvidence))
+	return !item.CorroborationOnly && extraction.ActiveExploitation && evidence != "" && validSourceURL(item.URL) &&
+		!isExploitTracker(item.Source) && !ExploitCodeListingURL(item.URL) &&
+		strings.Contains(strings.ToLower(item.Title+" "+item.Content), evidence)
+}
+
+// pruneEmptyDelta deletes fields that assert nothing, recursively.
+func pruneEmptyDelta(fields map[string]any) {
+	for key, value := range fields {
+		if emptyDeltaValue(value) {
+			delete(fields, key)
+		}
+	}
+}
+
+func emptyDeltaValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case bool:
+		return !v
+	case string:
+		return strings.TrimSpace(v) == ""
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		pruneEmptyDelta(v)
+		return len(v) == 0
+	}
+	return false
 }
 
 func normalizeIndicator(s string) string {

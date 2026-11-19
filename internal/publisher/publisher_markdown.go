@@ -412,6 +412,11 @@ func publicExploitationEvidence(b BundleBrief) *BundleExploitationEvidence {
 		if copy.Status == "" {
 			copy.Status = "unknown"
 		}
+		// An exploit-code listing is not exploitation evidence; republishing a
+		// brief that cited one corrects its public state.
+		if copy.Status == "confirmed_active" && pipeline.ExploitCodeListingURL(copy.SourceURL) {
+			return &BundleExploitationEvidence{Status: "unknown"}
+		}
 		return &copy
 	}
 	evidence := &BundleExploitationEvidence{Status: "unknown"}

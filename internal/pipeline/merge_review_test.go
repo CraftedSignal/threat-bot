@@ -310,8 +310,10 @@ func TestMergeClaimsRejectionKeepsUmbrellaSourceUnseen(t *testing.T) {
 				if !seed.routeToCampaign(context.Background(), first, &ExtractionResult{}) {
 					t.Fatal("fixture did not create a campaign")
 				}
-				item = scraper.RawItem{SourceID: "campaign:held", Source: "research", Title: "ClickFix targets macOS", URL: "https://research.example/held"}
-				extraction = &ExtractionResult{AffectedOS: []string{"macOS"}}
+				// The actor survives relevance filtering and is an applied claim,
+				// so the rejected check runs. An empty delta is never checked.
+				item = scraper.RawItem{SourceID: "campaign:held", Source: "research", Title: "Storm-1234 ClickFix targets macOS", URL: "https://research.example/held"}
+				extraction = &ExtractionResult{AffectedOS: []string{"macOS"}, ThreatActor: "Storm-1234"}
 				indexKey = "campaign|clickfix"
 			}
 			entries, err := db.FindByVendorCycle(indexKey)

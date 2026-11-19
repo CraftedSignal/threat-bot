@@ -80,9 +80,11 @@ type Pipeline struct {
 	notifierToken          string
 	notifierCooldown       time.Duration
 	siteURL                string
-	decisions              decisionLog
-	socialProvider         scraper.StatusProvider
-	socialThreadDepth      int
+	// kevHolds dedupes notices for exploitation updates the contract refused.
+	kevHolds          exploitationReconcileHolds
+	decisions         decisionLog
+	socialProvider    scraper.StatusProvider
+	socialThreadDepth int
 }
 
 type Config struct {

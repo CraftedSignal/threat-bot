@@ -1,6 +1,10 @@
 package pipeline
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestIndependentEvidenceLineages(t *testing.T) {
 	one := []ClaimEvidence{{Type: "artifact", Detail: "reproduction", SourceURL: "https://lab.example/poc"}, {Type: "corroboration", Detail: "cites same", SourceURL: "https://lab.example/poc#result"}}
@@ -133,5 +137,40 @@ func TestRumourDoesNotPromoteModelAuthorityLabelOrUnattestedDomains(t *testing.T
 		if got := NextClaimState(ClaimReported, ClaimAssessment{Evidence: evidence}); got != ClaimReported {
 			t.Fatal(got)
 		}
+	}
+}
+
+// An ordinary advisory has no claim_state. Merging a source whose extraction
+// carries a claim assessment must not start a rumour lifecycle on it: before
+// the fix fmt.Sprint(nil) produced "<nil>", the "no lifecycle" guard never
+// fired, and 262 published advisories gained claim_state "<nil>" plus empty
+// evidence and gaps fields.
+func TestMergeRumourLifecycleIgnoresBriefsWithoutLifecycle(t *testing.T) {
+	for name, fm := range map[string]map[string]any{
+		"absent": {"type": "advisory"},
+		"null":   {"type": "advisory", "claim_state": nil},
+		"blank":  {"type": "advisory", "claim_state": "  "},
+		"legacy": {"type": "advisory", "claim_state": "<nil>"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			extraction := &ExtractionResult{ClaimAssessment: &ClaimAssessment{
+				Claim: "Java4Shell enables pre-auth RCE", Status: "unverified", Likelihood: "likely",
+				Evidence: []ClaimEvidence{{Type: "corroboration", Detail: "vendor advisory describes the flaw", SourceURL: "https://news.example/java4shell"}},
+				Gaps:     []string{"no in-the-wild telemetry"},
+			}}
+			if mergeRumourLifecycle(fm, extraction) {
+				t.Fatalf("lifecycle changed a brief without one: %v", fm)
+			}
+			for _, key := range []string{"evidence", "gaps", "unverified_notice"} {
+				if _, ok := fm[key]; ok {
+					t.Fatalf("lifecycle wrote %s on a brief without one: %v", key, fm)
+				}
+			}
+			if state, ok := fm["claim_state"]; ok && state != nil {
+				if s := strings.TrimSpace(fmt.Sprint(state)); s != "" && s != "<nil>" {
+					t.Fatalf("claim_state became %q", s)
+				}
+			}
+		})
 	}
 }

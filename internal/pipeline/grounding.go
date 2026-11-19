@@ -119,7 +119,7 @@ Check substantive claims in title, summary, content, CVEs, IOCs, affected assets
 
 The severity field is an operational urgency label, not a quoted claim: do not flag it for being absent from the source, but do flag it when it clearly overstates the impact the source describes. Publication IDs, slugs, timestamps, source URLs, QA status, and source/priority assessments are generated metadata, not claims from the article. A recommendation can be a clear operational response to a sourced fact even when the source does not use the same imperative wording. Do not excuse invented attack paths, affected versions, fixed versions, exploitation, or observed impact.
 
-` + exploitationStatesDefinition + ` Flag confirmed_active only when the source does not report attacks actually exploiting the vulnerability. Flag not_observed only when the source reports attacks actually exploiting the vulnerability. A vendor saying it is not aware of malicious exploitation supports not_observed within that vendor's stated scope; it does not assert that exploitation is impossible or that global monitoring found none. Do not flag a source-supported exploitation status merely because the source uses different wording.`
+` + exploitationStatesDefinition + ` Flag confirmed_active only when the source does not report attacks actually exploiting the vulnerability or attempts to exploit it. Flag not_observed only when the source reports attacks actually exploiting the vulnerability or attempts to exploit it. A vendor saying it is not aware of malicious exploitation supports not_observed within that vendor's stated scope; it does not assert that exploitation is impossible or that global monitoring found none. Do not flag a source-supported exploitation status merely because the source uses different wording.`
 
 const groundingSystem = groundingFactSystem + `
 
@@ -400,7 +400,7 @@ affected versions, fixed versions, CVEs, IOCs, and mitigations. Preserve the
 identity fields and source reference. A short verified notice is better than a
 detailed speculative brief. If exploitation_evidence is present, its status
 must be exactly confirmed_active, not_observed, or unknown. Use confirmed_active
-only when the source shows observed exploitation.
+only when the source shows exploitation or exploitation attempts in the wild.
 
 %s`, source, briefYAML, strings.Join(issues, "\n"), exploitationStatesDefinition)
 	var revised revisedBrief

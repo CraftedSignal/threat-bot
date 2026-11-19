@@ -15,7 +15,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const mergeReviewPolicyVersion = "merge-review-2026-11-14-v1"
+// v2 grounds only the fields a merge writes (mergeAppliedDelta). Bumping it
+// re-assesses merges held under v1 for findings on discarded fields.
+const mergeReviewPolicyVersion = "merge-review-2026-11-19-v2"
 
 var errMergeReviewRequired = errors.New("merge requires editorial review")
 var errMergeTargetMissing = errors.New("merge target is missing")

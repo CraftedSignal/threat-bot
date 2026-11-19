@@ -211,6 +211,17 @@ func (v cnaAffectedVersion) render() (string, bool) {
 	if !open && !exactProductVersion.MatchString(from) {
 		return "", false
 	}
+	// CVE JSON 5 defines an upper limit of "*" as unbounded: "all versions
+	// starting at" the lower one. F5 states every NGINX record that way, so
+	// refusing it left NGINX2Shell CVE-2026-123633 unscoped and the grounding
+	// checker demanded the range until the brief was quarantined. Only the
+	// bare "*" is unbounded; "2.*" is a branch pattern and still refused.
+	if below == "*" && through == "" || through == "*" && below == "" {
+		if open {
+			return "", false
+		}
+		return ">= " + from, true
+	}
 	var op, bound string
 	switch {
 	case below != "" && through != "":

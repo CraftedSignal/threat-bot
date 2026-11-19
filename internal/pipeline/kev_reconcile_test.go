@@ -424,3 +424,26 @@ func TestMergeNotifiesOnlyForRecentKEVListings(t *testing.T) {
 		t.Fatal("an escalation to critical was suppressed")
 	}
 }
+
+// A held listing-only claim must not be downgraded by a later not_observed or
+// unknown state; only attributed confirmation replaces it.
+func TestMergeExploitationStateKeepsHeldListingClaim(t *testing.T) {
+	for _, status := range []string{"not_observed", "unknown"} {
+		base := map[string]any{"exploited": true, "exploitation_evidence": map[string]any{"status": "confirmed_active", "source_url": "https://sploitus.com/exploit?id=X"}}
+		mergeExploitationState(base, map[string]any{"exploitation_evidence": map[string]any{"status": status}})
+		if got := base["exploitation_evidence"].(map[string]any)["status"]; got != "confirmed_active" {
+			t.Fatalf("%s downgraded a held listing claim to %v", status, got)
+		}
+	}
+}
+
+// Validation keeps a listing-only state whose own text states exploitation:
+// grounding checks that claim against the source and the reconciliation
+// flags the citation for review. Withdrawing it would contradict the prose.
+func TestValidationKeepsListingOnlyClaimTheTextStates(t *testing.T) {
+	brief := &briefYAML{ID: "b", Title: "Node-RED CVE-2026-58115", Summary: "VulnCheck observed in-the-wild exploitation of CVE-2026-58115.", PublishedAt: "2026-11-01T00:00:00Z",
+		ExploitationEvidence: &ExploitationEvidence{Status: "confirmed_active", SourceURL: "https://sploitus.com/exploit?id=X"}}
+	if err := normalizeExploitationEvidence(brief); err != nil || !brief.Exploited || brief.ExploitationEvidence.Status != "confirmed_active" {
+		t.Fatalf("validation withdrew exploitation the text states: %+v err=%v", brief.ExploitationEvidence, err)
+	}
+}

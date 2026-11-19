@@ -195,12 +195,15 @@ func mergeExploitationState(base, incoming map[string]any) bool {
 }
 
 // exploitationStateRank ranks an evidence state. A confirmed state whose only
-// evidence is an exploit-code listing asserts nothing, so attributed evidence
-// from a later source replaces it instead of keeping the listing URL.
+// evidence is an exploit-code listing ranks with not_observed: attributed
+// confirmation from a later source replaces it (instead of keeping the
+// listing URL), but a not_observed or unknown state does not downgrade it.
+// Such a state survives validation and reconciliation only when the brief's
+// own text states exploitation, which a person must settle.
 func exploitationStateRank(evidence map[string]any) int {
 	rank := exploitationEvidenceRank(fmt.Sprint(evidence["status"]))
 	if rank == exploitationEvidenceRank("confirmed_active") && ExploitCodeListingURL(fmt.Sprint(evidence["source_url"])) {
-		return 0
+		return exploitationEvidenceRank("not_observed")
 	}
 	return rank
 }

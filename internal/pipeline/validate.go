@@ -957,7 +957,12 @@ func normalizeExploitationEvidence(brief *briefYAML) error {
 	if evidence.Status == "" {
 		evidence.Status = "unknown"
 	}
-	if evidence.Status == "confirmed_active" && ExploitCodeListingURL(evidence.SourceURL) {
+	// An exploit-code listing is not exploitation evidence, unless the brief's
+	// own text states exploitation: grounding checks that claim against the
+	// source and the reconciliation flags the listing citation for review.
+	// Withdrawing it silently would contradict the prose.
+	if evidence.Status == "confirmed_active" && ExploitCodeListingURL(evidence.SourceURL) &&
+		!TextClaimsExploitation(brief.Title, brief.Summary, brief.Content) {
 		*evidence = ExploitationEvidence{Status: "unknown"}
 	}
 	switch evidence.Status {

@@ -43,7 +43,9 @@ to a union.
 systems, including attempts recorded by honeypots or sensors and any KEV listing.
 Scanning, lab research, predictions and a public exploit or proof of concept are
 not exploitation, and an exploit-code listing (for example sploitus or Exploit-DB)
-never evidences it. An hourly reconciliation marks approved briefs whose CVEs CISA
+does not evidence it: a state citing only a listing is withdrawn, unless the
+brief's own text states exploitation, in which case it is kept and flagged for
+review. An hourly reconciliation marks approved briefs whose CVEs CISA
 lists in KEV as exploited, with the catalog as evidence, and withdraws a state
 whose only evidence is an exploit-code listing, unless the brief's own text states
 exploitation: that brief is held for review instead. Exploitation wording is read

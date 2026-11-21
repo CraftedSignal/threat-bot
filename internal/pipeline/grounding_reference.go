@@ -83,6 +83,63 @@ func omissionEvidencePrompt(refs []scopedGroundingEvidence) string {
 	return "\n\n## Scoped source evidence (JSON)\n" + string(data)
 }
 
+const omissionQuoteBinding = "__quote__"
+
+func canonicalOmissionSubject(subject string, subjects []string) (string, bool) {
+	if id := normalizeCVEID(subject); id != "" {
+		for _, candidate := range subjects {
+			if normalizeCVEID(candidate) == id {
+				return candidate, true
+			}
+		}
+		return "", false
+	}
+	key := scopeProductKey(subject)
+	if key == "" {
+		return "", false
+	}
+	for _, candidate := range subjects {
+		if scopeProductKey(candidate) == key {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// omissionEvidenceBindings represents a target and reference as one schema
+// choice. A plain source_evidence_id enum permits the model to pair a valid
+// reference for one product with a different eligible product. When the
+// original target is eligible, keep the repair bound to it; only malformed
+// original targets may be corrected to another brief target.
+func omissionEvidenceBindings(issueSubjects, subjects []string, refs []scopedGroundingEvidence) []string {
+	choices := []string{omissionQuoteBinding}
+	seen := map[string]bool{omissionQuoteBinding: true}
+	usedBytes := len(omissionQuoteBinding)
+	const maxBindingBytes = 2 * maxOmissionReferenceBytes
+	for _, originalSubject := range issueSubjects {
+		eligible := subjects
+		if canonical, ok := canonicalOmissionSubject(originalSubject, subjects); ok {
+			eligible = []string{canonical}
+		}
+		for _, ref := range refs {
+			for _, subject := range eligible {
+				if !containsString(ref.Subjects, subject) {
+					continue
+				}
+				encoded, _ := json.Marshal([]string{subject, ref.ID})
+				choice := string(encoded)
+				if seen[choice] || usedBytes+len(choice) > maxBindingBytes {
+					continue
+				}
+				choices = append(choices, choice)
+				seen[choice] = true
+				usedBytes += len(choice)
+			}
+		}
+	}
+	return choices
+}
+
 func resolveMaterialOmission(issue groundingIssue, source, brief string, refs []scopedGroundingEvidence) (groundingIssue, error) {
 	if issue.SourceEvidenceID != "" {
 		found := false

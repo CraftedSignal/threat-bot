@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -56,6 +57,15 @@ func TestGroundingEvidenceRepairUsesVertexCompatibleSubjectSchema(t *testing.T) 
 	if got := client.repairSchema.Properties["evidence"].Items.Properties["source_evidence_id"].Enum; len(got) != 0 {
 		t.Errorf("repair reference must allow an empty unsupported value without enums: %q", got)
 	}
+	bindings := client.repairSchema.Properties["evidence"].Items.Properties["binding"].Enum
+	if !containsString(bindings, omissionQuoteBinding) {
+		t.Errorf("repair schema must allow the verified quote path: %q", bindings)
+	}
+	for _, binding := range bindings {
+		if binding == "" {
+			t.Fatal("repair binding enum contains an empty value")
+		}
+	}
 	// Vertex rejects empty enum members with HTTP 400 before generating an
 	// answer. Unsupported evidence can instead leave source_quote empty.
 	subject := client.repairSchema.Properties["evidence"].Items.Properties["subject"]
@@ -67,6 +77,33 @@ func TestGroundingEvidenceRepairUsesVertexCompatibleSubjectSchema(t *testing.T) 
 		if value == "" || value != eligible[i] {
 			t.Fatalf("repair schema contains an invalid subject enum member: %q", subject.Enum)
 		}
+	}
+}
+
+func TestGroundingEvidenceCorrectionRejectsBindingForAnotherEligibleTarget(t *testing.T) {
+	brief := strings.Replace(syntheticIncompleteBrief, "affected_products: [Example Harbor]", "affected_products: [Example Harbor, OtherPlugin]", 1)
+	source := syntheticCompletenessSource + "\nOtherPlugin is fixed in 2.0."
+	calls := 0
+	client := referenceTestLLM{respond: func(_ context.Context, prompt, system string, schema *llm.Schema, out any) error {
+		calls++
+		refs := readReferenceFixture(t, prompt)
+		if system != materialOmissionEvidenceSystem {
+			return llm.DecodeStructured(`{"issues":[{"kind":"material_omission","field":"content","subject":"Example Harbor","source_quote":"invented","reason":"Missing the fixed release."}]}`, out)
+		}
+		for _, ref := range refs {
+			if containsString(ref.Subjects, "OtherPlugin") && !containsString(ref.Subjects, "Example Harbor") {
+				encoded, _ := json.Marshal([]string{"OtherPlugin", ref.ID})
+				wrongBinding := string(encoded)
+				answer, _ := json.Marshal(map[string]any{"evidence": []map[string]string{{"subject": "OtherPlugin", "binding": wrongBinding}}})
+				return llm.DecodeStructured(string(answer), out)
+			}
+		}
+		return errors.New("other-target reference is not actually scoped to that target")
+	}}
+	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", source, brief)
+	var contract *omissionEvidenceContractError
+	if result != nil || !errors.As(err, &contract) || !strings.Contains(err.Error(), "invalid target/reference selection") || calls != 2 {
+		t.Fatalf("correction must remain held if it switches an existing target: result=%+v err=%v calls=%d", result, err, calls)
 	}
 }
 
@@ -172,5 +209,56 @@ func TestGroundingEvidenceCorrectionBatchesOnlyInvalidFindings(t *testing.T) {
 		if !strings.Contains(result.Issues[i], want) {
 			t.Fatalf("correction changed finding order or meaning: %+v", result.Issues)
 		}
+	}
+}
+
+func TestGroundingEvidenceCorrectionBindsReferenceToItsTargetInSchema(t *testing.T) {
+	brief := strings.Replace(syntheticIncompleteBrief, "affected_products: [Example Harbor]", "affected_products: [Example Harbor, OtherPlugin]", 1)
+	source := syntheticCompletenessSource + "\nOtherPlugin is fixed in 2.0."
+	calls := 0
+	client := referenceTestLLM{respond: func(_ context.Context, prompt, system string, schema *llm.Schema, out any) error {
+		calls++
+		refs := readReferenceFixture(t, prompt)
+		if system != materialOmissionEvidenceSystem {
+			var unrelated string
+			for _, ref := range refs {
+				if ref.Quote == "OtherPlugin is fixed in 2.0." {
+					unrelated = ref.ID
+				}
+			}
+			if unrelated == "" {
+				return errors.New("unrelated product reference missing")
+			}
+			answer := fmt.Sprintf(`{"issues":[{"kind":"material_omission","field":"content","subject":"Example Harbor","source_evidence_id":%q,"reason":"Missing the fixed release."}]}`, unrelated)
+			return llm.DecodeStructured(answer, out)
+		}
+
+		binding := ""
+		items := schema.Properties["evidence"].Items
+		if items == nil || items.Properties["binding"] == nil {
+			return errors.New("target-bound repair selection missing from schema")
+		}
+		for _, choice := range items.Properties["binding"].Enum {
+			var pair []string
+			if json.Unmarshal([]byte(choice), &pair) != nil || len(pair) != 2 || pair[0] != "Example Harbor" {
+				continue
+			}
+			for _, ref := range refs {
+				if ref.ID == pair[1] && containsString(ref.Subjects, "Example Harbor") && ref.Quote == "Example Harbor is fixed in 2.4." {
+					binding = choice
+				}
+			}
+		}
+		if binding == "" {
+			return errors.New("target-bound repair selection missing from schema")
+		}
+		answer, _ := json.Marshal(map[string]any{"evidence": []map[string]string{{
+			"subject": "Example Harbor", "binding": binding, "source_quote": "",
+		}}})
+		return llm.DecodeStructured(string(answer), out)
+	}}
+	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", source, brief)
+	if err != nil || result == nil || result.Grounded || len(result.Issues) != 1 || !strings.Contains(result.Issues[0], "Example Harbor is fixed in 2.4.") || calls != 2 {
+		t.Fatalf("target-bound correction must repair an unrelated initial reference without dropping the blocker: result=%+v err=%v calls=%d", result, err, calls)
 	}
 }

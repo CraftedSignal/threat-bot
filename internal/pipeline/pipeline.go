@@ -441,17 +441,7 @@ func (p *Pipeline) processBatchChunk(ctx context.Context, chunk []scraper.RawIte
 				if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 					return ctxErr
 				}
-				// Waiting for a paid remote batch prevents duplicate inference.
-				// The item stays unconsumed and resumes once the answer exists.
-				var pending *llm.PendingBatchError
-				if errors.As(err, &pending) {
-					p.logger.Warn("item deferred while paid batch work is pending", "source_id", item.SourceID,
-						"source", item.Source, "error_class", "batch_pending", "error", err)
-				} else {
-					p.decisions.record(outcomeFailed)
-					p.logger.Error("pipeline error", "source_id", item.SourceID,
-						"source", item.Source, "error_class", llm.ErrorStatus(err), "error", err)
-				}
+				p.recordItemProcessingError(item, err)
 			}
 			if p.autoPublish && p.publisher != nil {
 				*published++
@@ -469,6 +459,27 @@ func (p *Pipeline) processBatchChunk(ctx context.Context, chunk []scraper.RawIte
 		}
 	}
 	return ctx.Err()
+}
+
+func (p *Pipeline) recordItemProcessingError(item scraper.RawItem, err error) {
+	// Waiting for a paid remote batch prevents duplicate inference. The item
+	// stays unconsumed and resumes once the answer exists.
+	var pending *llm.PendingBatchError
+	if errors.As(err, &pending) {
+		p.logger.Warn("item deferred while paid batch work is pending", "source_id", item.SourceID,
+			"source", item.Source, "error_class", "batch_pending", "error", err)
+		return
+	}
+	// A malformed omission finding is already durably held and logged by the
+	// grounding path. It is a publication-quality deferral, not an operational
+	// failure; the candidate remains unconsumed for later evidence changes.
+	var held durableGroundingHoldError
+	if errors.As(err, &held) {
+		return
+	}
+	p.decisions.record(outcomeFailed)
+	p.logger.Error("pipeline error", "source_id", item.SourceID,
+		"source", item.Source, "error_class", llm.ErrorStatus(err), "error", err)
 }
 
 // finishShutdown releases batch state and publishes work completed before the

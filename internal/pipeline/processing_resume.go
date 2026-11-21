@@ -102,6 +102,15 @@ type processingGroundingFailure struct {
 	Detail         string
 }
 
+// durableGroundingHoldError marks an item that was safely retained for
+// editorial or evidence review. It remains an error for callers that inspect
+// processItem directly, but the polling loop must not count it as an
+// operational pipeline failure after the hold has been persisted.
+type durableGroundingHoldError struct{ err error }
+
+func (e durableGroundingHoldError) Error() string { return e.err.Error() }
+func (e durableGroundingHoldError) Unwrap() error { return e.err }
+
 func (p *Pipeline) groundingFailureContextDigest(state processingCandidate) string {
 	data, _ := json.Marshal([]any{state.GroundingFailure.RequestDigest, p.processingPolicyKey(), state.EvidenceKey, state.BriefYAML, p.groundingFailureEvidenceDigest(state)})
 	return fmt.Sprintf("%x", sha256.Sum256(data))
@@ -127,7 +136,7 @@ func (p *Pipeline) holdGroundingContractFailure(key string, state *processingCan
 		return fmt.Errorf("saving grounding contract hold: %w", errors.Join(err, saveErr))
 	}
 	p.logger.Warn("holding candidate after grounding evidence contract failure", "source_id", state.Item.SourceID, "failure_kind", state.GroundingFailure.Kind, "request_digest", state.GroundingFailure.RequestDigest, "context_digest", state.GroundingFailure.ContextDigest)
-	return err
+	return durableGroundingHoldError{err: err}
 }
 
 // The verifier cache is process-local. Rehydrate it before deciding whether

@@ -31,6 +31,56 @@ func TestPublicationRejectsRegistryDumpEvenWhenGrounded(t *testing.T) {
 	}
 }
 
+func TestPublicationAllowsOnlyAutomatedListingWithdrawalPastLegacyQualityGaps(t *testing.T) {
+	doc := map[string]any{
+		"id": "brief-2026-11-fixture", "slug": "2026-11-fixture",
+		"title":    "Fixture product: Vulnerability (CVE-2026-4242)",
+		"summary":  "A proof of concept demonstrates the vulnerability.",
+		"content":  "The advisory describes the vulnerability and includes a proof of concept.",
+		"severity": "high", "published_at": "2026-11-01T00:00:00Z",
+		"affected_products": []string{"Fixture product"},
+		"cves":              []any{map[string]any{"id": "CVE-2026-4242", "kev": false, "kev_status": "false"}},
+		"exploited":         false, "exploitation_evidence": map[string]any{"status": "unknown"},
+		"updates": []any{map[string]any{
+			"level": "L1", "summary": "exploitation evidence corrected: an exploit-code listing is not exploitation",
+			"sources": []string{"threat-bot"}, "source_urls": []string{},
+		}},
+	}
+	raw, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := ValidatePublicationConsistency(string(raw)); len(issues) != 0 {
+		t.Fatalf("machine-recorded risk-reducing correction was held for unrelated legacy quality issues: %v", issues)
+	}
+
+	// The same marker cannot bypass review if the body itself still claims
+	// observed exploitation, or if the marker came from an untrusted source.
+	doc["content"] = "Exploitation has been observed in the wild."
+	claimed, _ := yaml.Marshal(doc)
+	if issues := ValidatePublicationConsistency(string(claimed)); len(issues) == 0 {
+		t.Fatal("correction marker bypassed a contradictory exploitation claim")
+	}
+	doc["content"] = "The advisory describes the vulnerability and includes a proof of concept."
+	doc["updates"] = []any{map[string]any{
+		"level": "L1", "summary": "exploitation evidence corrected: an exploit-code listing is not exploitation",
+		"sources": []string{"sploitus"}, "source_urls": []string{},
+	}}
+	spoofed, _ := yaml.Marshal(doc)
+	if issues := ValidatePublicationConsistency(string(spoofed)); len(issues) == 0 {
+		t.Fatal("untrusted correction marker bypassed legacy publication checks")
+	}
+	doc["updates"] = []any{map[string]any{
+		"level": "L1", "summary": "exploitation evidence corrected: an exploit-code listing is not exploitation",
+		"sources": []string{"threat-bot"}, "source_urls": []string{},
+	}}
+	doc["cves"] = []any{map[string]any{"id": "CVE-2026-4242", "kev": true, "kev_status": "true"}}
+	kevListed, _ := yaml.Marshal(doc)
+	if issues := ValidatePublicationConsistency(string(kevListed)); len(issues) == 0 {
+		t.Fatal("correction marker bypassed checks for a KEV-listed CVE")
+	}
+}
+
 func TestPublicationRequiresSubstantiveContentAndResponse(t *testing.T) {
 	for _, tc := range []struct{ name, content, want string }{
 		{"empty body", "  ", "content"},

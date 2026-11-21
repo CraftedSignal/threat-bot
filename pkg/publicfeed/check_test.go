@@ -77,6 +77,53 @@ func TestCheckBriefAcceptsStrictContract(t *testing.T) {
 	}
 }
 
+func TestCheckBriefAllowsRecommendationGapOnAutomatedExploitationWithdrawal(t *testing.T) {
+	corrected := `---
+title: FixtureServer vulnerability (CVE-2026-1234)
+slug: fixtureserver-vulnerability
+brief_id: brief-001
+event_id: event-001
+revision: 1
+activity_at: "2026-10-19T08:00:00Z"
+date: "2026-10-19T08:00:00Z"
+type: advisory
+exploitation_evidence:
+  status: unknown
+cves:
+  - id: CVE-2026-1234
+    kev_status: "false"
+references:
+  - https://example.com/advisory
+updates:
+  - level: L1
+    summary: "exploitation evidence corrected: an exploit-code listing is not exploitation"
+    sources: [threat-bot]
+---
+
+FixtureServer has a vulnerability and a public proof of concept.
+`
+	issues := CheckBrief("brief.md", []byte(corrected))
+	for _, i := range issues {
+		if i.Code == "brief.quality" && strings.Contains(i.Message, "substantive recommendation") {
+			t.Fatalf("safe exploitation withdrawal was blocked by the old recommendation gap: %#v", issues)
+		}
+	}
+
+	// The narrow exception does not suppress other content-quality findings.
+	emptyBody := strings.Replace(corrected, "FixtureServer has a vulnerability and a public proof of concept.", "", 1)
+	if issues := CheckBrief("brief.md", []byte(emptyBody)); !strings.Contains(issueCodes(issues), "brief.quality") {
+		t.Fatalf("correction marker suppressed unrelated quality checks: %#v", issues)
+	}
+	untrusted := strings.Replace(corrected, "sources: [threat-bot]", "sources: [sploitus]", 1)
+	if issues := CheckBrief("brief.md", []byte(untrusted)); !strings.Contains(issueCodes(issues), "brief.quality") {
+		t.Fatalf("untrusted correction marker bypassed quality checks: %#v", issues)
+	}
+	kevListed := strings.Replace(corrected, `kev_status: "false"`, `kev_status: "true"`, 1)
+	if issues := CheckBrief("brief.md", []byte(kevListed)); !strings.Contains(issueCodes(issues), "brief.quality") {
+		t.Fatalf("KEV-listed correction marker bypassed quality checks: %#v", issues)
+	}
+}
+
 func TestCheckBriefAcceptsInitialRevisionWithoutHistory(t *testing.T) {
 	initial := strings.Replace(validBrief, "revision: 2\nactivity_at:", "revision: 1\nactivity_at:", 1)
 	initial = strings.Replace(initial, `activity_at: "2026-10-20T08:00:00Z"`, `activity_at: "2026-10-19T08:00:00Z"`, 1)

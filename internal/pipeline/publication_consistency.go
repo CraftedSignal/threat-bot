@@ -23,6 +23,14 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 	if brief == nil {
 		return []string{"brief YAML is empty"}
 	}
+	// A catalog-backed exploitation withdrawal is a narrow safety correction to
+	// an already-published brief. It must not be held because that legacy brief
+	// lacks unrelated content-quality fields (such as a recommendation or hunt
+	// lead). Structural validation, source-reference checks, and rendering still
+	// run in the normal publication path.
+	if safeExploitationWithdrawalUpdate(brief) {
+		return nil
+	}
 
 	var issues []string
 	title := publicationString(brief["title"])
@@ -89,6 +97,53 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 		}
 	}
 	return append(issues, publicationQualityIssues(brief)...)
+}
+
+func safeExploitationWithdrawalUpdate(brief map[string]any) bool {
+	if exploited, ok := brief["exploited"].(bool); ok && exploited {
+		return false
+	}
+	if value := brief["exploited"]; value != nil {
+		if _, ok := value.(bool); !ok {
+			return false
+		}
+	}
+	evidence, ok := asStringMap(brief["exploitation_evidence"])
+	if !ok || strings.ToLower(publicationString(evidence["status"])) != "unknown" || publicationString(evidence["source_url"]) != "" {
+		return false
+	}
+	if briefTextClaimsExploitation(brief) {
+		return false
+	}
+	// A KEV-listed CVE must remain exploited even if another source's listing
+	// was the previous evidence. Reconciliation records those with CISA as the
+	// source, so no true KEV flag may be present on this downgrade path.
+	cves := yamlAnyList(brief["cves"])
+	if len(cves) == 0 {
+		return false
+	}
+	for _, raw := range cves {
+		entry, ok := asStringMap(raw)
+		if !ok {
+			continue
+		}
+		if kev, _ := entry["kev"].(bool); kev || strings.EqualFold(publicationString(entry["kev_status"]), "true") {
+			return false
+		}
+	}
+	updates := yamlAnyList(brief["updates"])
+	if len(updates) == 0 {
+		return false
+	}
+	last, ok := asStringMap(updates[len(updates)-1])
+	if !ok || publicationString(last["level"]) != "L1" || publicationString(last["summary"]) != "exploitation evidence corrected: an exploit-code listing is not exploitation" {
+		return false
+	}
+	sources := yamlStringList(last["sources"])
+	if len(sources) != 1 || sources[0] != "threat-bot" || len(yamlAnyList(last["source_urls"])) != 0 {
+		return false
+	}
+	return true
 }
 
 func publicationString(v any) string {

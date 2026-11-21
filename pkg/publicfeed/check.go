@@ -76,6 +76,7 @@ type briefDocument struct {
 	ExploitationEvidence exploitationEvidence   `yaml:"exploitation_evidence"`
 	CVEs                 []briefCVE             `yaml:"cves"`
 	TTPs                 []briefTTP             `yaml:"mitre_ttps"`
+	Updates              []briefUpdate          `yaml:"updates"`
 	References           []string               `yaml:"references"`
 	RevisionHistory      []briefRevision        `yaml:"revision_history"`
 	SourceAssessment     map[string]interface{} `yaml:"source_assessment"`
@@ -89,8 +90,31 @@ type exploitationEvidence struct {
 	Confidence string `yaml:"confidence"`
 }
 
+type briefUpdate struct {
+	Level      string   `yaml:"level"`
+	Summary    string   `yaml:"summary"`
+	Sources    []string `yaml:"sources"`
+	SourceURLs []string `yaml:"source_urls"`
+}
+
+func isAutomatedListingWithdrawal(brief briefDocument) bool {
+	if brief.Exploited || strings.ToLower(strings.TrimSpace(brief.ExploitationEvidence.Status)) != "unknown" || strings.TrimSpace(brief.ExploitationEvidence.SourceURL) != "" || len(brief.CVEs) == 0 || len(brief.Updates) == 0 {
+		return false
+	}
+	for _, cve := range brief.CVEs {
+		if cve.KEV || strings.EqualFold(strings.TrimSpace(cve.KEVStatus), "true") {
+			return false
+		}
+	}
+	last := brief.Updates[len(brief.Updates)-1]
+	return last.Level == "L1" &&
+		last.Summary == "exploitation evidence corrected: an exploit-code listing is not exploitation" &&
+		len(last.Sources) == 1 && last.Sources[0] == "threat-bot" && len(last.SourceURLs) == 0
+}
+
 type briefCVE struct {
 	ID        string `yaml:"id"`
+	KEV       bool   `yaml:"kev"`
 	KEVStatus string `yaml:"kev_status"`
 }
 
@@ -198,6 +222,9 @@ func CheckBriefWithMode(path string, data []byte, mode Mode) []Issue {
 		issues = append(issues, issue(path, "body", "brief.active_html", "active raw HTML is not allowed in public brief content"))
 	}
 	for _, message := range ContentQualityIssues(ContentQualityInput{Summary: brief.Description, Content: string(body), HasCVE: len(brief.CVEs) > 0 || cvePattern.MatchString(brief.Title+"\n"+brief.Description+"\n"+string(body)), ActionPlan: brief.ActionPlan}) {
+		if isAutomatedListingWithdrawal(brief) && strings.Contains(message, "substantive recommendation") {
+			continue
+		}
 		issues = append(issues, issue(path, "body", "brief.quality", message))
 	}
 	return sorted(issues)

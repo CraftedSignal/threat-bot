@@ -34,7 +34,7 @@ Preview an amendment to an approved draft:
 ./threat-bot -config config.yaml drafts amend --id DRAFT_ID --file revised.yaml
 ```
 
-Applying requires `--apply`, the preview's `--expect-sha256` and `--expect-proposed-sha256`, `--backup-dir`, `--operator`, and `--reason`. The original YAML is backed up; remote publication must succeed before the local snapshot is updated. The alternative `--set-brief-id ID --set-slug SLUG` changes identity and requires careful collision review. `--resolve-unpublished-identity-collision` is only for a draft whose original identity never published.
+Applying requires `--apply`, the preview's `--expect-sha256` and `--expect-proposed-sha256`, `--backup-dir`, `--operator`, and `--reason`. If the revised YAML omits `lastmod`, apply stamps it with the current UTC time; the proposed hash continues to cover the reviewed input YAML. The original YAML is backed up; remote publication must succeed before the local snapshot is updated. The alternative `--set-brief-id ID --set-slug SLUG` changes identity and requires careful collision review. `--resolve-unpublished-identity-collision` is only for a draft whose original identity never published.
 
 `drafts retire-duplicates --canonical-id ID --duplicate-id ID` previews duplicate consolidation; repeat `--duplicate-id` as needed. Applying adds `--apply --operator NAME --reason TEXT` and changes remote artifacts and local duplicate status.
 

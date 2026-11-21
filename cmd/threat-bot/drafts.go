@@ -339,6 +339,10 @@ func runDraftsAmend(db *storage.DB, pub draftAmendPublisher, args []string, out 
 		}
 		revisedLastmod = &parsed
 	}
+	lastmodForApply := revised.Lastmod
+	if lastmodForApply == "" {
+		lastmodForApply = "(set to apply time in UTC)"
+	}
 	for _, update := range revised.UpdateLog {
 		if _, err := time.Parse(time.RFC3339, update.At); err != nil {
 			return fmt.Errorf("replacement update timestamp must be RFC3339: %w", err)
@@ -354,7 +358,7 @@ func runDraftsAmend(db *storage.DB, pub draftAmendPublisher, args []string, out 
 	}
 	currentSHA := fmt.Sprintf("%x", sha256.Sum256([]byte(draft.BriefYAML)))
 	revisedSHA := fmt.Sprintf("%x", sha256.Sum256(revisedBytes))
-	if _, err := fmt.Fprintf(out, "Draft: %s\nPublished brief: %s -> %s\nPublic slug: %s -> %s\nTitle: %s -> %s\nPublished: %s -> %s\nLastmod: %s -> %s\nUpdates: %d -> %d\nCurrent SHA256: %s\nProposed SHA256: %s\n", *id, current.ID, revised.ID, current.Slug, revised.Slug, current.Title, revised.Title, current.PublishedAt, revised.PublishedAt, current.Lastmod, revised.Lastmod, len(current.UpdateLog), len(revised.UpdateLog), currentSHA, revisedSHA); err != nil {
+	if _, err := fmt.Fprintf(out, "Draft: %s\nPublished brief: %s -> %s\nPublic slug: %s -> %s\nTitle: %s -> %s\nPublished: %s -> %s\nLastmod: %s -> %s\nUpdates: %d -> %d\nCurrent SHA256: %s\nProposed SHA256: %s\n", *id, current.ID, revised.ID, current.Slug, revised.Slug, current.Title, revised.Title, current.PublishedAt, revised.PublishedAt, current.Lastmod, lastmodForApply, len(current.UpdateLog), len(revised.UpdateLog), currentSHA, revisedSHA); err != nil {
 		return err
 	}
 	if !*apply {
@@ -380,6 +384,21 @@ func runDraftsAmend(db *storage.DB, pub draftAmendPublisher, args []string, out 
 	}
 	if currentSHA == revisedSHA {
 		return fmt.Errorf("replacement YAML is identical to stored YAML")
+	}
+	if revised.Lastmod == "" {
+		revisedBytes, err = addAmendLastmod(revisedBytes, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("setting amendment lastmod: %w", err)
+		}
+		revised, err = publisher.ParseBriefYAML(string(revisedBytes))
+		if err != nil {
+			return fmt.Errorf("parsing amended YAML with lastmod: %w", err)
+		}
+		parsed, err := time.Parse(time.RFC3339, revised.Lastmod)
+		if err != nil {
+			return fmt.Errorf("generated lastmod is invalid: %w", err)
+		}
+		revisedLastmod = &parsed
 	}
 	// A second read narrows the race between preview validation and remote
 	// publication. The final compare-and-swap in SQLite closes it locally.
@@ -417,6 +436,37 @@ func runDraftsAmend(db *storage.DB, pub draftAmendPublisher, args []string, out 
 		return err
 	}
 	return nil
+}
+
+// addAmendLastmod stamps an amended public brief without reformatting its YAML.
+// The CLI hashes the operator-reviewed input before calling this helper, so a
+// generated timestamp does not make preview/apply hashes drift.
+func addAmendLastmod(raw []byte, at time.Time) ([]byte, error) {
+	text := string(raw)
+	lines := strings.SplitAfter(text, "\n")
+	offset := 0
+	for _, line := range lines {
+		value := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if strings.HasPrefix(value, "published_at:") {
+			ending := "\n"
+			if strings.HasSuffix(line, "\r\n") {
+				ending = "\r\n"
+			} else if !strings.HasSuffix(line, "\n") {
+				ending = "\n"
+			}
+			insert := "lastmod: \"" + at.UTC().Format(time.RFC3339) + "\"" + ending
+			if !strings.HasSuffix(line, "\n") {
+				insert = ending + insert
+			}
+			result := make([]byte, 0, len(raw)+len(insert))
+			result = append(result, raw[:offset+len(line)]...)
+			result = append(result, insert...)
+			result = append(result, raw[offset+len(line):]...)
+			return result, nil
+		}
+		offset += len(line)
+	}
+	return nil, fmt.Errorf("replacement YAML has no top-level published_at field")
 }
 
 func backupDraftYAML(dir, id, original string) (string, error) {

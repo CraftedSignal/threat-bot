@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Stamp `lastmod` with the apply-time UTC timestamp when `drafts amend` publishes a correction whose replacement YAML omits it, keeping public index and JSON Feed modification timestamps current.
 - Bind grounding-repair source references to their eligible product or CVE target in the response schema. Malformed cross-target selections can be corrected without dropping blockers or relaxing source-evidence validation.
 - Adopt `threat-bot` as the command and Go module name, with `THREAT_BOT_CONFIG` as the configuration environment variable.
 - Make builds independent of a sibling feed checkout by including the shared validation packages and provenance.

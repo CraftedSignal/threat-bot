@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-const productVersionToken = `v?\d[0-9A-Za-z.+:_-]*`
-const qualifiedProductVersionToken = `v?\d+(?:[._+-][A-Za-z0-9]+)+`
+// Some vendors name release streams with a letter prefix (for example,
+// NGINX Plus R33). Keep the exception narrow so prose words are not parsed as
+// version values.
+const productVersionToken = `(?:v?\d[0-9A-Za-z.+:_-]*|R\d+)`
+const qualifiedProductVersionToken = `(?:v?\d+(?:[._+-][A-Za-z0-9]+)+|R\d+)`
 
 var productVersionInParens = regexp.MustCompile(`(?i)^(.+?)\s*\(\s*((?:versions?\s+)?(?:<=|>=|<|>|=|~|\^)\s*` + productVersionToken + `(?:\s*,\s*(?:<=|>=|<|>|=|~|\^)\s*` + productVersionToken + `)*|(?:before|after|through)\s+` + productVersionToken + `|(?:n/?a|` + productVersionToken + `)\s+(?:to|through)\s+` + productVersionToken + `|` + productVersionToken + `(?:\s*,\s*` + productVersionToken + `)+|` + qualifiedProductVersionToken + `)\s*\)$`)
 var productVersionAfterName = regexp.MustCompile(`(?i)^(.+?)\s+(before|after|through)\s+(` + productVersionToken + `)$`)

@@ -36,13 +36,6 @@ func injectAffectedRanges(briefYAML string, item scraper.RawItem, primary primar
 	}
 	structured := map[string][]string{}
 	conflicting := map[string]bool{}
-	record := func(key string, ranges []string) {
-		if prior, ok := structured[key]; ok && !sameRanges(prior, ranges) {
-			conflicting[key] = true
-			return
-		}
-		structured[key] = ranges
-	}
 	if item.Source == "nvd" || item.Source == "ghsa" {
 		for _, mr := range parseAffectedRangeLines(item.Metadata["affected_ranges"]) {
 			var matches []string
@@ -52,12 +45,22 @@ func injectAffectedRanges(briefYAML string, item scraper.RawItem, primary primar
 				}
 			}
 			if len(matches) == 1 {
-				record(scopeProductKey(matches[0]), mr.ranges)
+				key := scopeProductKey(matches[0])
+				if prior, ok := structured[key]; ok && !sameRanges(prior, mr.ranges) {
+					conflicting[key] = true
+				} else {
+					structured[key] = mr.ranges
+				}
 			}
 		}
 	}
+	// CVE Program/CNA facts are the vendor's primary affected-version record.
+	// NVD's normalized ranges can omit precision (for example, .8 versus .8.1)
+	// or flatten custom release streams. Use complete primary-record ranges for
+	// products they cover, while retaining NVD metadata for other products.
 	for key, ranges := range primaryRecordRanges(products, primary) {
-		record(key, ranges)
+		structured[key] = ranges
+		delete(conflicting, key)
 	}
 	for key, ranges := range structured {
 		scopes[key] = ranges
@@ -103,7 +106,7 @@ type cnaAffectedVersion struct {
 	Changes         json.RawMessage `json:"changes"`
 }
 
-var exactProductVersion = regexp.MustCompile(`^` + productVersionToken + `$`)
+var exactProductVersion = regexp.MustCompile(`(?i)^` + productVersionToken + `$`)
 
 // primaryRecordRanges returns the affected ranges the primary CVE records state
 // for each brief product. A record names a product only by its exact name,

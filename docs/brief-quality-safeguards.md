@@ -51,8 +51,11 @@ whose only evidence is an exploit-code listing, unless the brief's own text stat
 exploitation: that brief is held for review instead. Exploitation wording is read
 per clause, so negated, hedged or conditional statements and detection guidance
 are not claims. Only listings from the last week send update notifications; a
-brief whose update fails the publication contract is left unchanged and reported
-for review.
+catalog-backed exploitation correction whose update fails unrelated narrative
+quality checks is left unchanged and reported for review. The narrow withdrawal
+of a listing-only exploitation claim can still publish when the brief text does
+not claim observed exploitation; schema, source-reference and rendering checks
+remain in force.
 Rumour promotion requires pipeline-issued provenance; model JSON cannot mint it.
 Unverifiable publisher ownership or independence requires review.
 

@@ -269,6 +269,57 @@ func TestReconcileExploitationWithdrawsListingOnlyEvidence(t *testing.T) {
 	}
 }
 
+func TestReconcileExploitationPublishesSafetyCorrectionDespiteLegacyQualityGaps(t *testing.T) {
+	listingOnly := strings.Replace(kevReconcileBriefYAML, "content: |\n  CVE-2026-4242 lets unauthenticated attackers run code on WidgetServer.\n\n  ## Recommendation\n  Upgrade WidgetServer to 4.2.1, which fixes CVE-2026-4242, and restrict the management port to administrator networks until it is patched.\n", "content: A public proof of concept demonstrates the issue.\n", 1)
+	listingOnly = strings.Replace(listingOnly, "exploitation_evidence:\n  status: unknown\n", "exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://sploitus.com/exploit?id=CVE-2026-4242\n", 1)
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	if err := db.CreateDraft(&storage.Draft{ID: "legacy-poc", Status: storage.StatusApproved, Source: "sploitus", BriefYAML: listingOnly, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	p := kevReconcilePipeline(t, db, kevTestCatalog(t, map[string]string{"CVE-2099-9999": ""}), "")
+	pub := &safetyCorrectionPublisher{}
+	p.publisher, p.autoPublish = pub, true
+	result, err := p.ReconcileExploitation(context.Background(), ExploitationReconcileOptions{Now: time.Now().UTC()})
+	if err != nil || result.Updated != 1 || result.Corrected != 1 || result.Held != 0 {
+		t.Fatalf("listing-only false positive was held behind unrelated quality checks: result=%+v err=%v", result, err)
+	}
+	draft, err := db.GetDraft("legacy-poc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(draft.BriefYAML, "exploited: true") || strings.Contains(draft.BriefYAML, "sploitus.com/exploit") {
+		t.Fatalf("unsafe exploitation claim survived: %s", draft.BriefYAML)
+	}
+	if len(pub.briefs) != 1 || strings.Contains(pub.briefs[0], "exploited: true") {
+		t.Fatalf("corrected brief was not safely published: %+v", pub.briefs)
+	}
+	intents, err := db.ListPublicationIntents()
+	if err != nil || len(intents) != 0 {
+		t.Fatalf("publication intent not consumed after enqueue: intents=%+v err=%v", intents, err)
+	}
+}
+
+type safetyCorrectionPublisher struct{ briefs []string }
+
+func (p *safetyCorrectionPublisher) ValidatePublication(brief string) error {
+	if err := ValidateBriefContract(brief); err != nil {
+		return err
+	}
+	if issues := ValidatePublicationConsistency(brief); len(issues) > 0 {
+		return fmt.Errorf("brief requires editorial review: %s", strings.Join(issues, "; "))
+	}
+	return nil
+}
+func (p *safetyCorrectionPublisher) Publish(brief string) error {
+	if err := p.ValidatePublication(brief); err != nil {
+		return err
+	}
+	p.briefs = append(p.briefs, brief)
+	return nil
+}
+func (*safetyCorrectionPublisher) Flush() error { return nil }
+
 func TestReconcileExploitationDoesNotAddPrioritySignals(t *testing.T) {
 	brief := strings.Replace(kevReconcileBriefYAML, "exploitation_evidence:\n  status: unknown\n",
 		"exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://www.exploit-db.com/exploits/1\n", 1)

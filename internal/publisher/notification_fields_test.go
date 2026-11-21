@@ -96,6 +96,27 @@ func TestPublicNotificationFieldsEqualPublishedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestPublisherAcceptsAutomatedExploitationWithdrawalWithLegacyQualityGaps(t *testing.T) {
+	raw := strings.Replace(notificationDraftYAML, "  ## Recommendation\n  Upgrade WidgetServer to 4.2.1, which fixes CVE-2026-4242, and restrict the management port to administrator networks until it is patched.\n", "  The advisory includes a proof of concept.\n", 1)
+	raw = strings.Replace(raw, "exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://sensors.example/report\n  observed_at: \"2026-11-18T00:00:00Z\"\n  confidence: medium\n", "exploited: false\nexploitation_evidence:\n  status: unknown\n", 1)
+	raw += `updates:
+  - level: L1
+    summary: "exploitation evidence corrected: an exploit-code listing is not exploitation"
+    sources: [threat-bot]
+    source_urls: []
+`
+	p := New("example/feed", "", func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := p.ValidatePublication(raw); err != nil {
+		t.Fatalf("publisher rejected safe exploitation withdrawal: consistency=%v err=%v", pipeline.ValidatePublicationConsistency(raw), err)
+	}
+	if err := p.Publish(raw); err != nil {
+		t.Fatalf("publisher did not buffer safe exploitation withdrawal: %v", err)
+	}
+	if len(p.pending) != 1 {
+		t.Fatalf("pending publications = %d, want 1", len(p.pending))
+	}
+}
+
 type recordedNotifications struct {
 	mu    sync.Mutex
 	posts []map[string][]map[string]any

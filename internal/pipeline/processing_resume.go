@@ -76,7 +76,7 @@ func groundingIssueIdentity(issue string) string {
 			subject, _, _ := strings.Cut(subjectAndReason, ":")
 			if versionDetail := strings.Index(subject, " ("); versionDetail >= 0 {
 				qualifier := strings.TrimSpace(subject[versionDetail+2:])
-				if len(qualifier) > 0 && (qualifier[0] >= '0' && qualifier[0] <= '9' || strings.HasPrefix(qualifier, "<") || strings.HasPrefix(qualifier, ">") || strings.HasPrefix(qualifier, "version")) {
+				if isVersionRangeQualifier(qualifier) {
 					subject = subject[:versionDetail]
 				}
 			}
@@ -87,6 +87,21 @@ func groundingIssueIdentity(issue string) string {
 		}
 	}
 	return ""
+}
+
+func isVersionRangeQualifier(qualifier string) bool {
+	qualifier = strings.ToLower(strings.TrimSpace(qualifier))
+	for _, prefix := range []string{"<", ">", "version ", "versions ", "before ", "prior to ", "up to ", "at least ", "less than "} {
+		if strings.HasPrefix(qualifier, prefix) {
+			return true
+		}
+	}
+	for _, suffix := range []string{" and earlier", " or earlier", " and later", " or later"} {
+		if strings.HasSuffix(qualifier, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func configuredRetryBackoff(d time.Duration) time.Duration {

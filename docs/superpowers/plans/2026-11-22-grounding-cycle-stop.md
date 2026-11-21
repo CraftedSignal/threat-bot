@@ -26,8 +26,8 @@
 
 **Files:** `internal/pipeline/processing_resume.go`, `internal/pipeline/candidate_processing.go`, `internal/pipeline/grounding_cycle_test.go`.
 
-- [x] Add tests showing two distinct findings followed by a repeated field and subject are recognized, including version-text normalization, distinct products, and legacy empty history.
+- [x] Add tests showing two distinct findings followed by a repeated field and subject are recognized, including version-text normalization, numeric product qualifiers, distinct products, legacy empty history, checkpoint persistence, and candidate quarantine after a cycle.
 - [x] Run the focused test before implementation; it failed to compile because the cycle tracker did not exist.
-- [x] Persist normalized issue identities in the candidate checkpoint, compare failed rechecks with history, and quarantine on recurrence.
+- [x] Persist normalized issue identities in the candidate checkpoint, compare failed rechecks with history, and quarantine on recurrence. Restrict normalization to explicit version-range qualifiers so numeric product names remain distinct.
 - [x] Run `GOWORK=off go test ./internal/pipeline`, then `GOWORK=off go test -race -timeout=10m ./...`; both passed.
 - [ ] Commit, open PR, pass CI/review, release, validate and deploy using the established release procedure.

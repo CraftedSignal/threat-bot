@@ -188,31 +188,83 @@ func cveIDSet(cves []BundleCVE) map[string]bool {
 func mergeStructuredCVEs(existing, verified []BundleCVE, excluded map[string]bool) []BundleCVE {
 	verifiedByID := make(map[string]BundleCVE, len(verified))
 	for _, cve := range verified {
-		verifiedByID[strings.ToUpper(strings.TrimSpace(cve.ID))] = cve
+		id := strings.ToUpper(strings.TrimSpace(cve.ID))
+		if id == "" {
+			continue
+		}
+		cve.ID = id
+		if prior, ok := verifiedByID[id]; ok {
+			cve = mergeBundleCVEFields(cve, prior)
+		}
+		verifiedByID[id] = cve
 	}
 
-	merged := make([]BundleCVE, 0, len(existing))
+	merged := make([]BundleCVE, 0, len(existing)+len(verified))
+	indices := make(map[string]int, len(existing)+len(verified))
 	for _, cve := range existing {
 		id := strings.ToUpper(strings.TrimSpace(cve.ID))
 		if id == "" || excluded[id] {
 			continue
 		}
-		if enriched, ok := verifiedByID[id]; ok {
-			merged = append(merged, enriched)
-			delete(verifiedByID, id)
+		cve.ID = id
+		if idx, ok := indices[id]; ok {
+			merged[idx] = mergeBundleCVEFields(merged[idx], cve)
 			continue
 		}
+		indices[id] = len(merged)
 		merged = append(merged, cve)
+	}
+	for i := range merged {
+		if enriched, ok := verifiedByID[merged[i].ID]; ok {
+			// Verified metadata is authoritative where present, while fields
+			// carried only by an existing row (for example product scope) survive.
+			merged[i] = mergeBundleCVEFields(enriched, merged[i])
+			delete(verifiedByID, merged[i].ID)
+		}
 	}
 	for _, cve := range verified {
 		id := strings.ToUpper(strings.TrimSpace(cve.ID))
+		if id == "" || excluded[id] {
+			continue
+		}
 		if _, ok := verifiedByID[id]; !ok {
 			continue
 		}
+		cve.ID = id
+		cve = mergeBundleCVEFields(cve, verifiedByID[id])
 		merged = append(merged, cve)
 		delete(verifiedByID, id)
 	}
 	return merged
+}
+
+// mergeBundleCVEFields prefers non-empty values from preferred and fills gaps
+// from fallback. KEV membership is monotonic until the catalog is reapplied.
+func mergeBundleCVEFields(preferred, fallback BundleCVE) BundleCVE {
+	if preferred.ID == "" {
+		preferred.ID = fallback.ID
+	}
+	if preferred.Product == "" {
+		preferred.Product = fallback.Product
+	}
+	if preferred.EPSS == 0 {
+		preferred.EPSS = fallback.EPSS
+	}
+	if preferred.EPSSPercentile == 0 {
+		preferred.EPSSPercentile = fallback.EPSSPercentile
+	}
+	if preferred.CVSS == 0 {
+		preferred.CVSS = fallback.CVSS
+	}
+	if preferred.CVSSVector == "" {
+		preferred.CVSSVector = fallback.CVSSVector
+	}
+	preferred.KEV = preferred.KEV || fallback.KEV
+	if preferred.KEVStatus == "" || strings.EqualFold(preferred.KEVStatus, "unknown") ||
+		(strings.EqualFold(preferred.KEVStatus, "false") && strings.EqualFold(fallback.KEVStatus, "true")) {
+		preferred.KEVStatus = fallback.KEVStatus
+	}
+	return preferred
 }
 
 type briefCVEScope struct {

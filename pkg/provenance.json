@@ -32,16 +32,16 @@
       "destination": "pkg/publicfeed/check.go",
       "upstream_sha256": "8bb0e8f9548231ebfc7f6dd14c09b9fde8fa2085436f7aef1cc3b1b5aac42c68",
       "imported_sha256": "6a2c4890a9dd1ba4066ac10c91c941ed0ceaf33987de750bfc20c03a4fd0d6ff",
-      "adapted_sha256": "2e45335c38ec0cdcb4f26f8a33694c0e96b7e11a285fbcf7d55e0178ff6d19ba",
-      "adaptation": "First-party adaptation: include description and action_plan in the decoded brief and apply the shared narrative/action-plan readiness contract."
+      "adapted_sha256": "169de1bc1093777f7e310085ed7c57f98133163e0140c065fc1d8ce2ce11fad4",
+      "adaptation": "Narrowly allow a machine-recorded threat-bot withdrawal of PoC-only exploitation evidence to bypass only the recommendation-quality blocker; retain schema, evidence consistency and other public-feed quality checks."
     },
     {
       "source": "internal/publicfeed/check_test.go",
       "destination": "pkg/publicfeed/check_test.go",
       "upstream_sha256": "e93325b22c166730a455a5b4341f98e4fc6913f47637def8cd1cc03627a6a8e9",
       "imported_sha256": "1d4c07238ee7999680b92b64d5fd1d3a946f3fa06e0c033b18d94c5df747032e",
-      "adapted_sha256": "1fa3e449eb2f82d588479ac60afab0169fe02be2792b00b65f46552a32033eb4",
-      "adaptation": "First-party adaptation: add fictional remediation guidance to the existing valid-brief fixture for the shared readiness contract."
+      "adapted_sha256": "1b665a316eecb0df882f449cf6c69b073e7a589fda40adf5c0a13b2270a28b25",
+      "adaptation": "Add regression coverage for the narrowly scoped automated PoC-withdrawal quality exception and its guards."
     }
   ],
   "upstream_license": {

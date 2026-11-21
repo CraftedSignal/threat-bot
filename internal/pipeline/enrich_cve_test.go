@@ -130,6 +130,26 @@ cves:
 	}
 }
 
+func TestMergeStructuredCVEsDeduplicatesAndPreservesFields(t *testing.T) {
+	existing := []BundleCVE{
+		{ID: "CVE-2026-1234", Product: "Widget", CVSS: 9.1, CVSSVector: "CVSS:3.1/AV:N", KEVStatus: "false"},
+		{ID: " cve-2026-1234 ", EPSS: 0.7, EPSSPercentile: 0.9, KEV: true, KEVStatus: "true"},
+		{ID: "CVE-2026-5678", Product: "Other"},
+	}
+	verified := []BundleCVE{{ID: "CVE-2026-1234", CVSS: 8.8}}
+
+	got := mergeStructuredCVEs(existing, verified, nil)
+	if len(got) != 2 {
+		t.Fatalf("expected one record per CVE, got %#v", got)
+	}
+	if got[0].ID != "CVE-2026-1234" || got[0].Product != "Widget" || got[0].CVSS != 8.8 || got[0].EPSS != 0.7 || !got[0].KEV || got[0].KEVStatus != "true" {
+		t.Fatalf("duplicate CVE fields were not merged into one verified record: %#v", got[0])
+	}
+	if got[1].ID != "CVE-2026-5678" || got[1].Product != "Other" {
+		t.Fatalf("unrelated CVE was changed: %#v", got[1])
+	}
+}
+
 func TestCVEEnricherPreservesStructuredCVEsWhenVerificationIsPartial(t *testing.T) {
 	verifier := NewCVEVerifier(nil, nil)
 	verifier.cache["CVE-2026-101356"] = &CVEMeta{

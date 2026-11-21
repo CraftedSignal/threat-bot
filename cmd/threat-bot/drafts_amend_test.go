@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/craftedsignal/threat-bot/internal/publisher"
 	"github.com/craftedsignal/threat-bot/internal/storage"
 )
 
 const amendOriginalYAML = "id: brief-1\nslug: 2024-01-example\ntitle: Old title\npublished_at: 2024-01-01T00:00:00Z\n"
-const amendRevisedYAML = "id: brief-1\nslug: 2024-01-example\ntitle: Example product advisory\npublished_at: 2026-04-08T00:00:00Z\n"
+const amendRevisedYAML = "id: brief-1\nslug: 2024-01-example\ntitle: Example product advisory\npublished_at: 2026-04-08T00:00:00Z\nlastmod: 2026-04-08T00:00:00Z\n"
 const amendDraftID = "4df6072c-298e-4a59-86c0-c37c6e02ce05"
 
 type amendPublisherFake struct {
@@ -110,6 +111,41 @@ func TestDraftAmendApplyBacksUpPublishesThenUpdatesSelectedDraft(t *testing.T) {
 	}
 }
 
+func TestDraftAmendApplySetsLastmodWhenReplacementOmitsIt(t *testing.T) {
+	db := setupAmendDraft(t)
+	revised := strings.Replace(amendRevisedYAML, "lastmod: 2026-04-08T00:00:00Z\n", "", 1)
+	if strings.Contains(revised, "lastmod:") {
+		t.Fatal("fixture must omit lastmod")
+	}
+	file := writeAmendFile(t, revised)
+	pub := &amendPublisherFake{}
+	start := time.Now().UTC().Add(-time.Second)
+	var output bytes.Buffer
+	if err := runDraftsAmend(db, pub, []string{
+		"--id", amendDraftID, "--file", file, "--apply",
+		"--expect-sha256", fmt.Sprintf("%x", sha256.Sum256([]byte(amendOriginalYAML))),
+		"--expect-proposed-sha256", fmt.Sprintf("%x", sha256.Sum256([]byte(revised))),
+		"--backup-dir", t.TempDir(), "--operator", "analyst", "--reason", "Correct public content",
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("published %d briefs, want 1", len(pub.published))
+	}
+	brief, err := publisher.ParseBriefYAML(pub.published[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastmod, err := time.Parse(time.RFC3339, brief.Lastmod)
+	if err != nil || lastmod.Before(start) || lastmod.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("published lastmod = %q, err=%v; want current UTC time", brief.Lastmod, err)
+	}
+	draft, err := db.GetDraft(amendDraftID)
+	if err != nil || draft.Lastmod == nil || !draft.Lastmod.Equal(lastmod) || draft.BriefYAML != pub.published[0] {
+		t.Fatalf("stored lastmod/YAML do not match published correction: draft=%+v err=%v", draft, err)
+	}
+}
+
 func TestDraftAmendRejectsUnsafeInputsBeforePublishing(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -144,6 +180,7 @@ func TestDraftAmendCanResolveUnpublishedIdentityCollision(t *testing.T) {
 	db := setupAmendDraft(t)
 	rekeyed := strings.ReplaceAll(amendOriginalYAML, "brief-1", "brief-2024-01-01-example")
 	rekeyed = strings.Replace(rekeyed, "slug: 2024-01-example", "slug: 2024-01-01-example", 1)
+	rekeyed = strings.Replace(rekeyed, "published_at: 2024-01-01T00:00:00Z\n", "published_at: 2024-01-01T00:00:00Z\nlastmod: 2026-04-08T00:00:00Z\n", 1)
 	file := writeAmendFile(t, rekeyed)
 	pub := &amendPublisherFake{}
 	err := runDraftsAmend(db, pub, []string{
@@ -226,7 +263,7 @@ func TestDraftAmendClearsContaminatedUpdateHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	draft, err := db.GetDraft(amendDraftID)
-	if err != nil || draft.BriefYAML != amendRevisedYAML || draft.Lastmod != nil || draft.UpdateLog != "" || draft.UpdateCount != 0 {
+	if err != nil || draft.BriefYAML != amendRevisedYAML || draft.Lastmod == nil || draft.Lastmod.Format(time.RFC3339) != "2026-04-08T00:00:00Z" || draft.UpdateLog != "" || draft.UpdateCount != 0 {
 		t.Fatalf("contaminated update metadata retained: %+v, %v", draft, err)
 	}
 	if len(pub.published) != 1 || pub.published[0] != amendRevisedYAML {

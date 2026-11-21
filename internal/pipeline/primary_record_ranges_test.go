@@ -74,6 +74,29 @@ func TestPrimaryRecordRangesRenderEveryStatedRange(t *testing.T) {
 	}
 }
 
+func TestPrimaryCNAProductRangesTakePrecedenceOverNVDProjection(t *testing.T) {
+	plus := `{"vendor":"F5","product":"NGINX Plus","defaultStatus":"unknown","versions":[{"lessThan":"37.3.0.1","status":"affected","version":"37.1.0","versionType":"custom"},{"lessThan":"37.0.8.1","status":"affected","version":"37.0.0","versionType":"custom"},{"lessThan":"*","status":"affected","version":"R33","versionType":"custom"}]}`
+	openSource := `{"vendor":"F5","product":"NGINX Open Source","defaultStatus":"unknown","versions":[{"lessThan":"1.31.9","status":"affected","version":"1.31.0","versionType":"semver"},{"lessThan":"1.30.7","status":"affected","version":"1.30.0","versionType":"semver"},{"lessThan":"*","status":"affected","version":"0.5.33","versionType":"custom"}]}`
+	brief := "affected_products:\n  - NGINX Plus\n  - NGINX Open Source\n"
+	item := scraper.RawItem{Source: "nvd", Metadata: map[string]string{"affected_ranges": "f5 nginx open source: >= 0.5.33, < 1.30.7; >= 1.31.0, < 1.31.9\nf5 nginx plus: >= 37.0.0, < 37.0.8; >= 37.1.0, < 37.3.0"}}
+	facts := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2026-113425", "NGINX Plus", plus),
+		affectedFact("CVE-2026-113425", "NGINX Open Source", openSource),
+	}}
+	got := renderedProducts(t, injectAffectedRanges(brief, item, facts))
+	want := []string{
+		"NGINX Plus (>= 37.1.0, < 37.3.0.1)",
+		"NGINX Plus (>= 37.0.0, < 37.0.8.1)",
+		"NGINX Plus (>= R33)",
+		"NGINX Open Source (>= 1.31.0, < 1.31.9)",
+		"NGINX Open Source (>= 1.30.0, < 1.30.7)",
+		"NGINX Open Source (>= 0.5.33)",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("affected_products = %q, want primary CNA scopes %q", got, want)
+	}
+}
+
 func TestPrimaryRecordRangesLeaveInterpretationToReview(t *testing.T) {
 	for name, tc := range map[string]struct{ product, record string }{
 		"URL instead of a version bound":   {"Microsoft 365 Apps for Enterprise", recordM365URL},
@@ -154,7 +177,7 @@ func TestPrimaryRecordRangesWithholdIncompleteOrConflictingRecords(t *testing.T)
 	}
 }
 
-func TestStructuredRangesTakePrecedenceOverProseAndMustAgree(t *testing.T) {
+func TestPrimaryRecordRangesTakePrecedenceOverNVDProjectionAndProse(t *testing.T) {
 	brief := "affected_products:\n  - PrestaShop\n"
 	facts := primaryRecordFacts{Included: []cnaSourceFact{affectedFact("CVE-2026-129957", "PrestaShop", recordPrestaShop)}}
 
@@ -169,8 +192,8 @@ func TestStructuredRangesTakePrecedenceOverProseAndMustAgree(t *testing.T) {
 	}
 
 	disagreeing := scraper.RawItem{Source: "nvd", Metadata: map[string]string{"affected_ranges": "prestashop prestashop: < 8.2.9"}}
-	if got := renderedProducts(t, injectAffectedRanges(brief, disagreeing, facts)); !slices.Equal(got, []string{"PrestaShop"}) {
-		t.Fatalf("disagreeing structured sources rendered scope: %q", got)
+	if got := renderedProducts(t, injectAffectedRanges(brief, disagreeing, facts)); !slices.Equal(got, []string{"PrestaShop (< 8.2.9)", "PrestaShop (>= 9.0.0, < 9.2.1)"}) {
+		t.Fatalf("primary record did not take precedence over NVD's incomplete projection: %q", got)
 	}
 }
 

@@ -458,8 +458,7 @@ func addAmendLastmod(raw []byte, at time.Time) ([]byte, error) {
 			if !strings.HasSuffix(line, "\n") {
 				insert = ending + insert
 			}
-			result := make([]byte, 0, len(raw)+len(insert))
-			result = append(result, raw[:offset+len(line)]...)
+			result := append([]byte(nil), raw[:offset+len(line)]...)
 			result = append(result, insert...)
 			result = append(result, raw[offset+len(line):]...)
 			return result, nil

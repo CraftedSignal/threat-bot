@@ -67,6 +67,19 @@ func TestProcessingFailureStillReportsPipelineError(t *testing.T) {
 	}
 }
 
+func TestDurablyHeldGroundingContractDoesNotCountAsPipelineFailure(t *testing.T) {
+	var logs bytes.Buffer
+	p := New(Config{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	item := scraper.RawItem{SourceID: "nvd:CVE-2099-4001", Source: "nvd"}
+	err := durableGroundingHoldError{err: errors.New("unsupported omission evidence")}
+
+	p.recordItemProcessingError(item, err)
+
+	if p.Decisions(time.Hour).Failed != 0 || strings.Contains(logs.String(), `"msg":"pipeline error"`) {
+		t.Fatalf("durable quality hold reported as pipeline failure: counts=%+v logs=%s", p.Decisions(time.Hour), logs.String())
+	}
+}
+
 // An unusable optional indicator must not make an otherwise usable extraction
 // unprocessable: the model repeats it for the same source on every retry.
 func TestExtractionDropsUnusableIndicatorsInsteadOfRejectingTheItem(t *testing.T) {

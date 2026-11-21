@@ -107,6 +107,19 @@ func TestGroundingEvidenceCorrectionRejectsBindingForAnotherEligibleTarget(t *te
 	}
 }
 
+func TestGroundingEvidenceCorrectionRejectsLegacyTargetSwitch(t *testing.T) {
+	brief := strings.Replace(syntheticIncompleteBrief, "affected_products: [Example Harbor]", "affected_products: [Example Harbor, OtherPlugin]", 1)
+	client := &evidenceRepairLLM{
+		report: groundingReport{Issues: []groundingIssue{{Kind: groundingKindMaterialOmission, Field: "content", Subject: "Example Harbor", Reason: "Missing the fixed release."}}},
+		answer: `{"evidence":[{"subject":"OtherPlugin","source_quote":"OtherPlugin is fixed in 2.0."}]}`,
+	}
+	result, err := NewGroundingChecker(client).WithLogger(quietLogger()).Check(context.Background(), "Example Harbor", syntheticCompletenessSource+"\nOtherPlugin is fixed in 2.0.", brief)
+	var contract *omissionEvidenceContractError
+	if result != nil || !errors.As(err, &contract) || !strings.Contains(err.Error(), "changed its eligible target") || client.calls != 2 {
+		t.Fatalf("legacy correction must not switch an existing target: result=%+v err=%v calls=%d", result, err, client.calls)
+	}
+}
+
 func TestGroundingRepairsMalformedOmissionEvidenceWithoutDroppingBlockers(t *testing.T) {
 	for _, issue := range []groundingIssue{
 		{Subject: "Example Harbor", SourceQuote: "fixed in 2.4"},

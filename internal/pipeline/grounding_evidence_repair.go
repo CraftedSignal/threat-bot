@@ -132,7 +132,12 @@ func (g *GroundingChecker) repairMaterialOmissionEvidence(ctx context.Context, s
 			}
 		} else {
 			// Preserve compatibility with providers that return the older quote/ID
-			// fields. The schema also offers an atomic target/reference binding.
+			// fields, but do not let compatibility bypass target preservation. The
+			// schema also offers an atomic target/reference binding.
+			correctedTarget, correctedTargetEligible := canonicalOmissionSubject(evidence.Subject, subjects)
+			if !correctedTargetEligible || (targetWasEligible && correctedTarget != originalTarget) {
+				return &omissionEvidenceContractError{Detail: fmt.Sprintf("material omission %d changed its eligible target", i+1)}
+			}
 			issue.Subject, issue.SourceQuote, issue.SourceEvidenceID = evidence.Subject, evidence.SourceQuote, evidence.SourceEvidenceID
 		}
 		resolved, err := resolveMaterialOmission(issue, source, brief, refs)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/craftedsignal/threat-bot/internal/scraper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestGroundingRetryResumesCandidateAcrossPipelineRestart(t *testing.T) {
@@ -106,6 +107,57 @@ func TestRepeatedGroundingFindingAcrossEvidenceRevisionQuarantines(t *testing.T)
 	}
 	if assemblies != 2 || repairs != 2 || checks != 4 {
 		t.Fatalf("unexpected calls across changed evidence: assemblies=%d repairs=%d checks=%d", assemblies, repairs, checks)
+	}
+}
+
+func TestFailedChangedEvidenceRebuildPreservesGroundingHistory(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	failAssembly := false
+	issue := "affected_products: missing source-supported fact for TeamCity: Missing the affected version bound."
+	client := shutdownStageLLM{
+		generate: func(_ context.Context, _, system string) (string, error) {
+			if strings.HasPrefix(system, groundingRepairSystemPrompt) {
+				return validWindowsPathBriefYAML, nil
+			}
+			if failAssembly {
+				return "", errors.New("temporary assembly outage")
+			}
+			return validWindowsPathBriefYAML, nil
+		},
+		generateJSON: func(_ context.Context, _, _ string, out any) error {
+			r := out.(*GroundingResult)
+			r.Grounded = false
+			r.Issues = []string{issue}
+			return nil
+		},
+	}
+	item := scraper.RawItem{SourceID: "resume:failed-evidence-rebuild", Source: "cisa-kev", Title: "TeamCity security advisory", Content: strings.Repeat("Confirmed vendor advisory about TeamCity. ", 30), Enriched: true, SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
+	cfg := Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 5, Logger: quietLogger(), RetryBackoff: -time.Second}
+	if err := New(cfg).processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	oldInputKey := New(cfg).processingInputKey(item)
+	changed := item
+	changed.Content += "\nA newer source revision repeats the same affected-version scope."
+	failAssembly = true
+	if err := New(cfg).processItem(context.Background(), changed); err == nil || !strings.Contains(err.Error(), "temporary assembly outage") {
+		t.Fatalf("changed-evidence rebuild error = %v, want temporary assembly outage", err)
+	}
+	cp, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil || cp.InputKey != oldInputKey {
+		t.Fatalf("interrupted rebuild lost prior checkpoint: checkpoint=%+v err=%v", cp, err)
+	}
+	var prior processingCandidate
+	if err := yaml.Unmarshal([]byte(cp.Payload), &prior); err != nil || len(prior.GroundingIssueHistory) != 1 {
+		t.Fatalf("interrupted rebuild lost grounding history: history=%v err=%v", prior.GroundingIssueHistory, err)
+	}
+	failAssembly = false
+	if err := New(cfg).processItem(context.Background(), changed); err != nil {
+		t.Fatal(err)
+	}
+	if reason, ok, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !ok || !strings.Contains(reason, "after 1 attempts") {
+		t.Fatalf("same finding restarted after interrupted rebuild: quarantined=%v reason=%q err=%v", ok, reason, err)
 	}
 }
 

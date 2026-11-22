@@ -76,6 +76,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				return p.deferSourceRefresh(*cp, state, key, refreshErr)
 			}
 			delete(state.RefreshRetries, key)
+			delete(state.RefreshRetryAttempts, key)
 			item = refreshed
 			targetMatches := true
 			if state.MergeDraftID != "" {

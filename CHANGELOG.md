@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Back off repeated source-evidence refresh failures exponentially, persisting attempts per input revision and capping automatic retries at 12 hours.
 - Publish a narrow, machine-recorded withdrawal when exploitation evidence is only a public PoC listing and the brief text does not claim observed exploitation, even if that already-published brief has unrelated narrative-quality gaps; structural publication checks remain enforced.
 - Prefer complete CVE Program affected-version records over less precise NVD range projections for the same product, and render letter-prefixed release streams such as NGINX Plus `R33` without dropping the other supported branches.
 - Stamp `lastmod` with the apply-time UTC timestamp when `drafts amend` publishes a correction whose replacement YAML omits it, keeping public index and JSON Feed modification timestamps current.

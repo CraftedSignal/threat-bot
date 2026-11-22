@@ -43,6 +43,24 @@ func TestGroundingMetadataCannotSupportMaterialOmission(t *testing.T) {
 	}
 }
 
+func TestAdvisoryURLAloneCannotEstablishMissingProductFact(t *testing.T) {
+	const header = "Vendor advisory (https://github.com/openemr/openemr/security/advisories/GHSA-0000):"
+	const source = header + "\nOpenEMR is fixed in version 2.4."
+	const brief = "affected_products: [OpenEMR]\ncontent: OpenEMR is vulnerable.\n"
+	issue := groundingIssue{Kind: groundingKindMaterialOmission, Subject: "OpenEMR", Field: "recommendation", SourceQuote: header, Reason: "Missing fixed version 2.4."}
+	if err := validateMaterialOmission(issue, source, brief); err == nil {
+		t.Fatal("a product name in an advisory URL was accepted as a source fact")
+	}
+	issue.SourceQuote = strings.Replace(header, "https://", "HTTPS://", 1)
+	if err := validateMaterialOmission(issue, strings.Replace(source, "https://", "HTTPS://", 1), brief); err == nil {
+		t.Fatal("a product name in an uppercase-scheme URL was accepted as a source fact")
+	}
+	issue.SourceQuote = "OpenEMR is fixed in version 2.4."
+	if err := validateMaterialOmission(issue, source, brief); err != nil {
+		t.Fatalf("explicit source fact was rejected: %v", err)
+	}
+}
+
 func TestGroundingMetadataFindingStaysHeldAfterBoundedCorrection(t *testing.T) {
 	quote := "CVE-2099-4001 coverage: unknown: usable remediation is not present in retained CNA evidence; this does not establish the absence of a fixed release"
 	answer, err := json.Marshal(materialOmissionEvidenceReport{Evidence: []materialOmissionEvidence{{Subject: "CVE-2099-4001", SourceQuote: quote}}})

@@ -266,7 +266,7 @@ func unresolvedPrimaryScopeGaps(primary primaryRecordFacts, products []string) [
 		if len(reasons) == 0 {
 			reasons = []string{"status or bounds that require interpretation"}
 		}
-		gaps = append(gaps, gap.cve+" / "+gap.product+": "+strings.Join(reasons, ", ")+". The supplied primary record cannot be mapped safely to release-version ranges; verify the installed branch against current vendor guidance. Do not infer a fixed release from this record.")
+		gaps = append(gaps, gap.cve+" / "+gap.product+": "+strings.Join(reasons, ", ")+". The supplied primary record cannot be mapped safely to release-version ranges; verify the installed branch against current vendor guidance. Do not infer a fixed release from these bounds; a fixed release may be reported when the supplied source explicitly states it for this product and CVE.")
 	}
 	return gaps
 }
@@ -291,6 +291,16 @@ func addPrimaryScopeGaps(doc map[string]any, primary primaryRecordFacts) bool {
 	prior := nonEmptyTrimmed(yamlStringList(assessment["gaps"]))
 	changed := false
 	for _, gap := range gaps {
+		// Replace only the exact machine-generated legacy wording for this
+		// scope. Retained candidates may already contain it, and retaining it
+		// would continue to contradict an explicitly sourced solution.
+		legacy := strings.Replace(gap, "Do not infer a fixed release from these bounds; a fixed release may be reported when the supplied source explicitly states it for this product and CVE.", "Do not infer a fixed release from this record.", 1)
+		for i := range prior {
+			if prior[i] == legacy {
+				prior[i] = gap
+				changed = true
+			}
+		}
 		if !slices.Contains(prior, gap) {
 			prior = append(prior, gap)
 			changed = true

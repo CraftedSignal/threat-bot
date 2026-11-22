@@ -323,6 +323,29 @@ func TestUnrenderablePrimaryScopeIsPublishedAsAnExplicitGap(t *testing.T) {
 	}
 }
 
+func TestScopeGapDistinguishesInferredVersionsFromExplicitFixes(t *testing.T) {
+	facts := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2099-4001", "Widget", `{"vendor":"Acme","product":"Widget","defaultStatus":"affected","versions":[{"version":"abc123","status":"affected","versionType":"git"}]}`),
+	}}
+	const old = "CVE-2099-4001 / Widget: Git commit bounds, defaultStatus=affected with version exceptions. The supplied primary record cannot be mapped safely to release-version ranges; verify the installed branch against current vendor guidance. Do not infer a fixed release from this record."
+	raw := "affected_products: [Widget]\nsource_assessment:\n  gaps:\n    - \"" + old + "\"\n    - Separate vendor limitation\n"
+	updated := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd"}, facts)
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(updated), &doc); err != nil {
+		t.Fatal(err)
+	}
+	gaps := yamlStringList(doc["source_assessment"].(map[string]any)["gaps"])
+	if len(gaps) != 2 || strings.Contains(strings.Join(gaps, "\n"), "Do not infer a fixed release from this record") {
+		t.Fatalf("obsolete scope instruction was not replaced while preserving other gaps: %q", gaps)
+	}
+	if !strings.Contains(gaps[0], "Do not infer a fixed release from these bounds") || !strings.Contains(gaps[0], "explicitly states") {
+		t.Fatalf("scope gap must distinguish inference from a separately stated fix: %q", gaps[0])
+	}
+	if twice := injectAffectedRanges(updated, scraper.RawItem{Source: "nvd"}, facts); twice != updated {
+		t.Fatal("scope migration must be idempotent")
+	}
+}
+
 func TestUnrenderableUnrelatedCNAProductDoesNotAddAScopeGap(t *testing.T) {
 	facts := primaryRecordFacts{Included: []cnaSourceFact{
 		affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"affected","versions":[{"version":"7.4-rc1","lessThanOrEqual":"*","status":"unaffected","versionType":"original_commit_for_fix"}]}`),

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -121,7 +122,7 @@ func TestRetainedWildcardCandidateRecoversWithoutReassembly(t *testing.T) {
 	p := New(cfg)
 	item := scraper.RawItem{SourceID: "cpe:retained", Source: "cisa-kev", Title: "Vendor security advisory", Content: strings.Repeat("Vendor confirms affected Linux release candidates. ", 10) + rc1 + " " + rc2}
 	item.Revision = item.ContentRevision()
-	state := processingCandidate{Item: item, Extraction: &ExtractionResult{}, BriefYAML: validWindowsPathBriefYAML + "\ncpes: [" + general + "]\n", Issues: []string{"cpes: source supports rc1 and rc2, not the general release"}}
+	state := processingCandidate{Item: item, Extraction: &ExtractionResult{}, BriefYAML: validWindowsPathBriefYAML + "\ncpes: [" + general + "]\n", Issues: []string{"cpes: source supports rc1 and rc2, not the general release"}, GroundingFindingPolicy: groundingFindingPolicyVersion}
 	if err := p.saveCandidate(p.processingInputKey(item), state, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +143,84 @@ func TestRetainedWildcardCandidateRecoversWithoutReassembly(t *testing.T) {
 	}
 	if cp, err := db.GetProcessingCheckpoint(item.SourceID); err != nil || cp != nil {
 		t.Fatalf("completed candidate retained: %+v err=%v", cp, err)
+	}
+}
+
+func TestRetainedLegacyFindingIsRecheckedWithoutReassembly(t *testing.T) {
+	checks, repairs, assemblies := 0, 0, 0
+	client := referenceTestLLM{respond: func(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+		switch out.(type) {
+		case *groundingReport:
+			checks++
+			return nil
+		case *revisedBrief:
+			repairs++
+			return structuredFromText(validWindowsPathBriefYAML, out)
+		case *generatedBrief:
+			assemblies++
+			return structuredFromText(validWindowsPathBriefYAML, out)
+		default:
+			t.Fatalf("unexpected provider boundary %T", out)
+			return nil
+		}
+	}}
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	p := New(Config{DB: db, LLMClient: client, MaxGroundingAttempts: 3, RetryBackoff: -1, Logger: quietLogger()})
+	item := scraper.RawItem{SourceID: "legacy:grounding", Source: "cisa-kev", Title: "Vendor security advisory", Content: strings.Repeat("Vendor confirms detection evidence. ", 10)}
+	item.Revision = item.ContentRevision()
+	key := p.processingInputKey(item)
+	state := processingCandidate{Item: item, Extraction: &ExtractionResult{}, BriefYAML: validWindowsPathBriefYAML, Issues: []string{"recommendation: obsolete finding"}}
+	if err := p.saveCandidate(key, state, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordGroundingAttempt(item.SourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	if assemblies != 0 || checks != 1 || repairs != 0 {
+		t.Fatalf("legacy finding should be freshly checked on saved candidate: assembly=%d checks=%d repairs=%d", assemblies, checks, repairs)
+	}
+}
+
+func TestLegacyFindingMigrationKeepsBudgetAndClearsOldHistory(t *testing.T) {
+	client := referenceTestLLM{respond: func(_ context.Context, _, _ string, _ *llm.Schema, out any) error {
+		if _, ok := out.(*groundingReport); !ok {
+			t.Fatalf("unexpected paid work %T", out)
+		}
+		return fmt.Errorf("temporary grounding outage")
+	}}
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	p := New(Config{DB: db, LLMClient: client, MaxGroundingAttempts: 4, RetryBackoff: -1, Logger: quietLogger()})
+	item := scraper.RawItem{SourceID: "legacy:history", Source: "cisa-kev", Title: "Vendor notice", Content: strings.Repeat("Vendor confirms detection evidence. ", 10)}
+	item.Revision = item.ContentRevision()
+	key := p.processingInputKey(item)
+	state := processingCandidate{Item: item, Extraction: &ExtractionResult{}, BriefYAML: validWindowsPathBriefYAML, GroundingIssueHistory: []string{"recommendation:widget"}}
+	if err := p.saveCandidate(key, state, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordGroundingAttempt(item.SourceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.processItem(context.Background(), item); err == nil {
+		t.Fatal("expected grounding outage")
+	}
+	cp, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil {
+		t.Fatalf("checkpoint missing: %v", err)
+	}
+	var saved processingCandidate
+	if err := yaml.Unmarshal([]byte(cp.Payload), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.GroundingFindingPolicy != groundingFindingPolicyVersion || len(saved.GroundingIssueHistory) != 0 {
+		t.Fatalf("old finding history survived migration: %+v", saved.GroundingIssueHistory)
+	}
+	if n, err := db.RecordGroundingAttempt(item.SourceID); err != nil || n != 3 {
+		t.Fatalf("existing and recheck attempts were not preserved: n=%d err=%v", n, err)
 	}
 }
 

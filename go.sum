@@ -2,8 +2,8 @@ cloud.google.com/go/compute/metadata v0.10.0 h1:pyKMUQSwchgkIBBJGdILqQbs/BNJXqwS
 cloud.google.com/go/compute/metadata v0.10.0/go.mod h1:rGFHRrIif570kSibjFTMbt6/4/tzgJWFGI/HVol4GIk=
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
-github.com/craftedsignal/sigma-parser v0.4.3 h1:V20d23kpLe/VQUSNHh3PFx0wt3k7P/TnpPJEhdXyjrY=
-github.com/craftedsignal/sigma-parser v0.4.3/go.mod h1:rUEle6AMnl4C7zeF7jlzwzL1sd+ZBMEby2mNSdo/3mU=
+github.com/craftedsignal/sigma-parser v0.4.4 h1:A99jvdCwFq4LKeOzotyKWzFsarPNkEtiTQpWO/yiGB4=
+github.com/craftedsignal/sigma-parser v0.4.4/go.mod h1:rUEle6AMnl4C7zeF7jlzwzL1sd+ZBMEby2mNSdo/3mU=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=

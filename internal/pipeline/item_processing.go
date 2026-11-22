@@ -34,6 +34,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	var mergeExtraction *ExtractionResult
 	var groundingIssueHistory []string
 	var staleCheckpointInputKey string
+	var staleCheckpointPayload string
 	defer func() {
 		// Keep the previous checkpoint (and its normalized grounding findings)
 		// until the replacement candidate is durable. A transient failure during
@@ -47,7 +48,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Error("checking stale processing checkpoint", "source_id", item.SourceID, "error", err)
 			return
 		}
-		if current != nil && current.InputKey == staleCheckpointInputKey {
+		if current != nil && current.InputKey == staleCheckpointInputKey && current.Payload == staleCheckpointPayload {
 			if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
 				p.logger.Error("deleting completed stale processing checkpoint", "source_id", item.SourceID, "error", err)
 			}
@@ -157,6 +158,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				groundingIssueHistory = append([]string(nil), state.GroundingIssueHistory...)
 				if len(groundingIssueHistory) > 0 {
 					staleCheckpointInputKey = cp.InputKey
+					staleCheckpointPayload = cp.Payload
 				} else if mergeExtraction == nil {
 					// Preserve the established invalidation semantics for ordinary
 					// checkpoints. Only checkpoints carrying repeated-finding state

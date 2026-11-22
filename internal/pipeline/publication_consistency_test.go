@@ -162,6 +162,25 @@ func TestValidatePublicationConsistencyRejectsSingleCVEIdentityOnHugeRoundup(t *
 	}
 }
 
+func TestValidatePublicationConsistencyRejectsDuplicateStructuredCVEEntries(t *testing.T) {
+	raw, err := yaml.Marshal(map[string]any{
+		"title":   "Widget: remote code execution (CVE-2026-129448)",
+		"summary": "An unauthenticated attacker can execute code on Widget.",
+		"content": "## Overview\nThe issue enables remote code execution.\n\n## Recommendation\nApply the vendor update.",
+		"cves": []any{
+			map[string]any{"id": "CVE-2026-129448", "cvss": 9.8},
+			map[string]any{"id": "CVE-2026-129448", "kev": true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
+	if !strings.Contains(issues, "duplicate CVE-2026-129448") {
+		t.Fatalf("duplicate CVE rows were not held for review: %s", issues)
+	}
+}
+
 func TestValidatePublicationConsistencyAllowsSmallCVEChainAndGenericLargeRoundup(t *testing.T) {
 	for name, doc := range map[string]map[string]any{
 		"small chain": {

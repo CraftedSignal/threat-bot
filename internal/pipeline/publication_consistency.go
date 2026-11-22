@@ -25,6 +25,7 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 	}
 	title := publicationString(brief["title"])
 	issues := publicationRoundupIdentityIssues(brief, title)
+	issues = append(issues, publicationDuplicateCVEIssues(brief)...)
 	// A catalog-backed exploitation withdrawal is a narrow safety correction to
 	// an already-published brief. It must not be held because that legacy brief
 	// lacks unrelated content-quality fields (such as a recommendation or hunt
@@ -131,6 +132,31 @@ func publicationAggregateRoundupTitle(title string) bool {
 		}
 	}
 	return false
+}
+
+func publicationDuplicateCVEIssues(brief map[string]any) []string {
+	seen := make(map[string]bool)
+	reported := make(map[string]bool)
+	var issues []string
+	for _, raw := range yamlAnyList(brief["cves"]) {
+		id := ""
+		if entry, ok := asStringMap(raw); ok {
+			id = publicationString(entry["id"])
+		} else if value, ok := raw.(string); ok {
+			id = strings.TrimSpace(value)
+		}
+		match := publicationCVERe.FindString(id)
+		if match == "" {
+			continue
+		}
+		id = strings.ToUpper(match)
+		if seen[id] && !reported[id] {
+			issues = append(issues, fmt.Sprintf("duplicate %s entries in cves require editorial resolution", id))
+			reported[id] = true
+		}
+		seen[id] = true
+	}
+	return issues
 }
 
 func safeExploitationWithdrawalUpdate(brief map[string]any) bool {

@@ -110,6 +110,80 @@ func TestRepeatedGroundingFindingAcrossEvidenceRevisionQuarantines(t *testing.T)
 	}
 }
 
+func TestChangedEnrichmentRetainsReplacementCheckpointWithSameFeedRevision(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	issue := "affected_products: missing source-supported fact for TeamCity: Missing a version."
+	client := shutdownStageLLM{
+		generate: func(context.Context, string, string) (string, error) { return validWindowsPathBriefYAML, nil },
+		generateJSON: func(_ context.Context, _, _ string, out any) error {
+			r := out.(*GroundingResult)
+			r.Grounded = false
+			r.Issues = []string{issue}
+			return nil
+		},
+	}
+	item := scraper.RawItem{SourceID: "resume:same-feed-revision", Source: "cisa-kev", Title: "Vendor advisory", Content: strings.Repeat("Confirmed source evidence. ", 30), Revision: "feed-revision-1", Enriched: true, SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
+	cfg := Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 5, Logger: quietLogger(), RetryBackoff: -time.Second}
+	if err := New(cfg).processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	changed := item
+	changed.Content += "\nAdditional independently refreshed evidence."
+	if New(cfg).processingInputKey(item) != New(cfg).processingInputKey(changed) {
+		t.Fatal("fixture must exercise a replacement with the same input key")
+	}
+	issue = "affected_products: missing source-supported fact for YouTrack: Missing a version."
+	if err := New(cfg).processItem(context.Background(), changed); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil {
+		t.Fatalf("new retained candidate was deleted: %v", err)
+	}
+	var state processingCandidate
+	if err := yaml.Unmarshal([]byte(cp.Payload), &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Item.Content != changed.Content || len(state.GroundingIssueHistory) != 2 {
+		t.Fatalf("replacement candidate or grounding history lost: content=%q history=%v", state.Item.Content, state.GroundingIssueHistory)
+	}
+}
+
+func TestChangedEvidenceDoesNotCarryLegacyFindingHistory(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	client := shutdownStageLLM{
+		generate: func(context.Context, string, string) (string, error) { return validWindowsPathBriefYAML, nil },
+		generateJSON: func(_ context.Context, _, _ string, out any) error {
+			r := out.(*GroundingResult)
+			r.Grounded = false
+			r.Issues = []string{"affected_products: missing source-supported fact for YouTrack: Missing a version."}
+			return nil
+		},
+	}
+	p := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 5, Logger: quietLogger(), RetryBackoff: -time.Second})
+	item := scraper.RawItem{SourceID: "resume:legacy-evidence", Source: "cisa-kev", Title: "Vendor advisory", Content: strings.Repeat("Confirmed source evidence. ", 30), Revision: "feed-revision-1", Enriched: true, SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
+	state := processingCandidate{Item: item, Extraction: &ExtractionResult{}, BriefYAML: validWindowsPathBriefYAML, GroundingIssueHistory: []string{"affected_products:teamcity"}}
+	if err := p.saveCandidate(p.processingInputKey(item), state, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	item.Content += "\nNew independently refreshed evidence."
+	if err := p.processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil {
+		t.Fatalf("replacement checkpoint missing: %v", err)
+	}
+	if err := yaml.Unmarshal([]byte(cp.Payload), &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.GroundingIssueHistory) != 1 || !strings.HasSuffix(state.GroundingIssueHistory[0], ":youtrack") {
+		t.Fatalf("legacy history crossed the evidence-policy change: %v", state.GroundingIssueHistory)
+	}
+}
+
 func TestFailedChangedEvidenceRebuildPreservesGroundingHistory(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()

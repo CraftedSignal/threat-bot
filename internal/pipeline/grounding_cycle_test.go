@@ -89,6 +89,18 @@ func TestGroundingIssueCycleKeepsNumericProductQualifiers(t *testing.T) {
 	}
 }
 
+func TestGroundingIssueCycleTracksExactNoncanonicalFinding(t *testing.T) {
+	issue := "summary: The source says ‘host RCE’, but does not establish command injection."
+	history, repeated := trackGroundingIssueCycle(nil, []string{issue})
+	if repeated || len(history) != 1 {
+		t.Fatalf("first noncanonical finding should seed history: repeated=%v history=%v", repeated, history)
+	}
+	_, repeated = trackGroundingIssueCycle(history, []string{" SUMMARY:   The source says ‘host RCE’, but does not establish command injection. "})
+	if !repeated {
+		t.Fatal("the same normalized noncanonical finding should be recognized")
+	}
+}
+
 func TestPipelineQuarantinesWhenGroundingRecheckCycles(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
@@ -118,23 +130,21 @@ func TestPipelineQuarantinesWhenGroundingRecheckCycles(t *testing.T) {
 	item := scraper.RawItem{SourceID: "grounding-cycle:teamcity", Source: "research", URL: "https://vendor.example/teamcity", Title: "TeamCity security advisory", Content: strings.Repeat("TeamCity security advisory. ", 30), Enriched: true}
 	key := p.processingInputKey(item)
 	state := processingCandidate{Item: item, BriefYAML: validWindowsPathBriefYAML, Score: 5, Confidence: 1}
-	for attempt := 1; attempt <= 3; attempt++ {
-		if attempt > 1 {
-			checkpoint, err := db.GetProcessingCheckpoint(item.SourceID)
-			if err != nil || checkpoint == nil {
-				reason, quarantined, qerr := db.PipelineQuarantineReason(item.SourceID)
-				t.Fatalf("attempt %d lost retry checkpoint: %+v %v checks=%d repairs=%d quarantined=%v reason=%q quarantine_error=%v", attempt, checkpoint, err, checks, repairs, quarantined, reason, qerr)
-			}
-			if err := yaml.Unmarshal([]byte(checkpoint.Payload), &state); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := p.processCandidate(context.Background(), key, state); err != nil {
-			t.Fatalf("attempt %d: %v", attempt, err)
-		}
+	if err := p.processCandidate(context.Background(), key, state); err != nil {
+		t.Fatal(err)
 	}
-	if checks != 4 || repairs != 3 {
-		t.Fatalf("cycle used checks=%d repairs=%d, want 4 and 3", checks, repairs)
+	checkpoint, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || checkpoint == nil {
+		t.Fatalf("initial failed recheck did not retain a checkpoint: %+v %v", checkpoint, err)
+	}
+	if err := yaml.Unmarshal([]byte(checkpoint.Payload), &state); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.processCandidate(context.Background(), key, state); err != nil {
+		t.Fatal(err)
+	}
+	if checks != 2 || repairs != 1 {
+		t.Fatalf("repeated failed recheck bought more paid work: checks=%d repairs=%d, want 2 and 1", checks, repairs)
 	}
 	if _, ok, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !ok {
 		t.Fatalf("repeated finding was not quarantined: ok=%v err=%v", ok, err)

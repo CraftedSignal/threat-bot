@@ -87,17 +87,21 @@ func groundingFailThenPass(failFirst int) (shutdownStageLLM, *int) {
 func TestGroundingAttemptsClearedWhenGroundingSucceeds(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
-	// First Process: initial check + recheck both fail (attempt 1). Second: passes.
+	// First source revision fails its repair/recheck. A changed source revision
+	// is independently eligible for grounding and succeeds, clearing the budget.
 	client, _ := groundingFailThenPass(2)
 	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, RetryBackoff: -time.Second, Logger: quietLogger()})
 	item := ghsaItem("GHSA-b")
-	for i := 0; i < 2; i++ {
-		if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
-			t.Fatal(err)
-		}
+	if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
+		t.Fatal(err)
+	}
+	item.Content += " New vendor evidence confirms the corrected scope."
+	item.UpdatedAt = time.Now()
+	if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
+		t.Fatal(err)
 	}
 	if seen, _ := db.HasSeen(item.SourceID); !seen {
-		t.Fatal("item should have passed on second run")
+		t.Fatal("item should have passed on changed evidence")
 	}
 	if n, err := db.RecordGroundingAttempt(item.SourceID); err != nil || n != 1 {
 		t.Fatalf("attempt after success = %d err=%v, want 1 (counter reset)", n, err)

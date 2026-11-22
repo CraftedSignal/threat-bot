@@ -65,6 +65,21 @@ func TestThinDraftRecoveryRebuildsCanonicalNarrative(t *testing.T) {
 				if err := New(cfg).processItem(context.Background(), item); err != nil {
 					t.Fatal(err)
 				}
+				updated, err := db.GetDraft("canonical")
+				if err != nil || updated.BriefYAML != recoveryBase {
+					t.Fatalf("repeatedly rejected recovery changed the canonical brief: %v\n%s", err, updated.BriefYAML)
+				}
+				if _, quarantined, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !quarantined {
+					t.Fatalf("repeatedly rejected recovery was not quarantined: %v", err)
+				}
+				seen, _ = db.HasSeen(item.SourceID)
+				if !seen {
+					t.Fatal("quarantined recovery remained eligible for paid retries")
+				}
+				if assemblies != 1 || checks != 2 {
+					t.Fatalf("repeated recovery bought more paid work: assemblies=%d checks=%d", assemblies, checks)
+				}
+				return
 			}
 			if quality != 1 || assemblies != 1 || checks == 0 {
 				t.Fatalf("recovery bypassed/repeated full pipeline: quality=%d assembly=%d grounding=%d", quality, assemblies, checks)

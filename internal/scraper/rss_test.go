@@ -433,6 +433,13 @@ func TestMSISACDeclaresLinkedAdvisoriesAuthoritative(t *testing.T) {
 	}
 }
 
+func TestMSRCDeclaresLinkedAdvisoriesAuthoritative(t *testing.T) {
+	source := NewMSRC()
+	if !source.authoritativeArticleCVEs {
+		t.Fatal("MSRC summaries must fetch the linked advisory before CVE extraction")
+	}
+}
+
 func TestRSSScraperSetsAcceptHeader(t *testing.T) {
 	var gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -110,11 +110,25 @@ func (p *Pipeline) handlePostExtractionDedup(ctx context.Context, item scraper.R
 // scheduled advisories for a month. It is assembled without the LLM; individual
 // CVEs are folded in via mergeIntoDraft as they arrive, and their details are
 // written into the content body by enrichRoundupContent.
-func buildRoundupBriefYAML(vendor string, now time.Time, firstCVE string) string {
+func buildRoundupBriefYAML(vendor string, now time.Time, cves ...string) string {
 	vslug := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(vendor), " ", "-"))
-	cves := ""
-	if firstCVE != "" {
-		cves = "\ncves:\n  - " + strings.ToUpper(firstCVE)
+	var cveList strings.Builder
+	seen := make(map[string]struct{}, len(cves))
+	for _, raw := range cves {
+		cve := strings.ToUpper(strings.TrimSpace(raw))
+		if cve == "" || isPlaceholder(cve) {
+			continue
+		}
+		if _, ok := seen[cve]; ok {
+			continue
+		}
+		seen[cve] = struct{}{}
+		cveList.WriteString("\n  - ")
+		cveList.WriteString(cve)
+	}
+	frontmatterCVEs := ""
+	if cveList.Len() > 0 {
+		frontmatterCVEs = "\ncves:" + cveList.String()
 	}
 	return fmt.Sprintf(`id: "brief-%[1]s-%[2]s-security-updates"
 slug: "%[1]s-%[2]s-security-updates"
@@ -135,7 +149,7 @@ tags:
   - roundup
 affected_vendors:
   - "%[3]s"%[6]s
-`, now.Format("2006-01"), vslug, vendor, now.Format("January 2006"), now.UTC().Format(time.RFC3339), cves)
+`, now.Format("2006-01"), vslug, vendor, now.Format("January 2006"), now.UTC().Format(time.RFC3339), frontmatterCVEs)
 }
 
 // isCarvedOutFromRoundup returns true for CVEs that should get their own brief
@@ -368,11 +382,66 @@ func stringListContainsFold(values []string, want string) bool {
 	return false
 }
 
-func sanitizeRoundupExtraction(vendor string, extraction *ExtractionResult) *ExtractionResult {
+func sourceConfirmedRoundupCVEs(item scraper.RawItem, extraction *ExtractionResult) []string {
+	if extraction == nil {
+		return nil
+	}
+	asserted := make(map[string]struct{})
+	for _, id := range ExtractCVEsFromText(item.Title, item.Metadata["cve"]+" "+item.Metadata["cves"]) {
+		asserted[id] = struct{}{}
+	}
+	if item.BodyCVEsAreSubjects {
+		for _, id := range ExtractCVEsFromText("", item.Content) {
+			if roundupBodyCVEIsCurrent(item.Content, id) {
+				asserted[id] = struct{}{}
+			}
+		}
+	}
+
+	var confirmed []string
+	for _, raw := range extraction.CVEs {
+		id := strings.ToUpper(strings.TrimSpace(raw))
+		if _, ok := asserted[id]; ok {
+			confirmed = append(confirmed, id)
+		}
+	}
+	return confirmed
+}
+
+func roundupBodyCVEIsCurrent(content, cve string) bool {
+	historical := []string{"for comparison", "compared with", "similar to", "separate from", "unrelated to", "historical", "older cve", "previous cve", "earlier cve", "prior cve", "past cve"}
+	for _, match := range cveRegex.FindAllStringSubmatchIndex(content, -1) {
+		if !strings.EqualFold(content[match[2]:match[3]], cve) {
+			continue
+		}
+		// Regex byte offsets refer to content. Find sentence boundaries against
+		// that same string; lowercase only the extracted clause for comparison.
+		start := strings.LastIndexAny(content[:match[0]], ".!?\n;") + 1
+		end := len(content)
+		if boundary := strings.IndexAny(content[match[1]:], ".!?\n;"); boundary >= 0 {
+			end = match[1] + boundary
+		}
+		if !containsAny(strings.ToLower(content[start:end]), historical) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeRoundupExtractionCVEsToSource(item scraper.RawItem, extraction *ExtractionResult) *ExtractionResult {
 	if extraction == nil {
 		return nil
 	}
 	clean := *extraction
+	clean.CVEs = sourceConfirmedRoundupCVEs(item, extraction)
+	return &clean
+}
+
+func sanitizeRoundupExtraction(vendor string, extraction *ExtractionResult, item scraper.RawItem) *ExtractionResult {
+	if extraction == nil {
+		return nil
+	}
+	clean := *scopeRoundupExtractionCVEsToSource(item, extraction)
 	clean.AffectedVendors = []string{vendor}
 	clean.AffectedProducts = nil
 	clean.AffectedOS = nil
@@ -380,11 +449,11 @@ func sanitizeRoundupExtraction(vendor string, extraction *ExtractionResult) *Ext
 	return &clean
 }
 
-func sanitizeRoundupContentExtraction(vendor string, extraction *ExtractionResult) *ExtractionResult {
+func sanitizeRoundupContentExtraction(vendor string, extraction *ExtractionResult, item scraper.RawItem) *ExtractionResult {
 	if extraction == nil {
 		return nil
 	}
-	clean := *extraction
+	clean := *scopeRoundupExtractionCVEsToSource(item, extraction)
 	clean.AffectedVendors = []string{vendor}
 	clean.IOCs = nil
 	return &clean
@@ -472,6 +541,10 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 	if !p.roundupConsolidation || extraction == nil {
 		return false
 	}
+	// A model can over-extract CVEs associated with a vendor release. Keep only
+	// IDs the source identifies as subjects before they influence routing,
+	// merging, or generated per-CVE sections.
+	extraction = scopeRoundupExtractionCVEsToSource(item, extraction)
 	// Roundups are for patch-cycle vendor advisories: require at least one CVE
 	// and a single patch-cycle vendor. This keeps detection rules, news articles,
 	// risk writeups, and cross-vendor advisories out of vendor monthly roundups.
@@ -496,7 +569,7 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 	if key == "" || p.isCarvedOutFromRoundup(item, extraction) {
 		return false
 	}
-	roundupExtraction := sanitizeRoundupExtraction(vendor, extraction)
+	roundupExtraction := sanitizeRoundupExtraction(vendor, extraction, item)
 	roundupContentExtraction, err := p.filterRoundupContentExtraction(ctx, vendor, extraction, item)
 	if err != nil {
 		if errors.Is(err, errMergeRelevanceUnavailable) {
@@ -543,7 +616,7 @@ func (p *Pipeline) routeToRoundup(ctx context.Context, item scraper.RawItem, ext
 	}
 	// Otherwise create the roundup (template — no LLM assembly).
 	now := time.Now().UTC()
-	yaml := buildRoundupBriefYAML(vendor, now, firstNonPlaceholder(extraction.CVEs))
+	yaml := buildRoundupBriefYAML(vendor, now, extraction.CVEs...)
 	// The item that opens the roundup is its first source; without a reference
 	// the brief has no attribution and is held at publication.
 	if seeded, err := ensureInitialSourceReference(yaml, item.URL); err != nil {

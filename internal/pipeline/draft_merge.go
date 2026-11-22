@@ -319,7 +319,7 @@ func (p *Pipeline) unionIntoDraft(ctx context.Context, draftID string, extractio
 			}
 			return fmt.Errorf("merge: %w %q cannot update %s roundup", errNonAuthoritativeRoundupSource, item.Source, roundupVendor)
 		}
-		extraction = sanitizeRoundupExtraction(roundupVendor, extraction)
+		extraction = sanitizeRoundupExtraction(roundupVendor, extraction, item)
 	} else {
 		relevanceExtraction, relevance, err := p.assessDraftMergeRelevance(ctx, fm, extraction, item)
 		if err != nil {

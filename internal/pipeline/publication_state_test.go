@@ -48,7 +48,7 @@ func TestNewConsolidatedDraftStaysPendingWhileBuffered(t *testing.T) {
 				}
 			} else {
 				p.roundupConsolidation = true
-				if !p.routeToRoundup(context.Background(), scraper.RawItem{SourceID: "msrc-one", Source: "msrc", Title: "Microsoft security updates", URL: "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-10001"}, &ExtractionResult{CVEs: []string{"CVE-2026-10001"}, AffectedVendors: []string{"Microsoft"}, AffectedProducts: []string{"Windows"}}) {
+				if !p.routeToRoundup(context.Background(), scraper.RawItem{SourceID: "msrc-one", Source: "msrc", Title: "Microsoft security updates CVE-2026-10001", URL: "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-10001"}, &ExtractionResult{CVEs: []string{"CVE-2026-10001"}, AffectedVendors: []string{"Microsoft"}, AffectedProducts: []string{"Windows"}}) {
 					t.Fatal("roundup not routed")
 				}
 			}

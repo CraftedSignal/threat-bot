@@ -352,7 +352,9 @@ func NewJPCERT() *RSS {
 // Vendor PSIRT / security advisory feeds
 func NewMSRC() *RSS {
 	// Microsoft Security Response Center — Patch Tuesday and out-of-band advisories.
-	return NewRSS("msrc", "https://api.msrc.microsoft.com/update-guide/rss")
+	// Entries summarize linked first-party advisories; their article CVEs are
+	// authoritative subjects for routing and roundup folding.
+	return NewRSS("msrc", "https://api.msrc.microsoft.com/update-guide/rss").withAuthoritativeArticleCVEs()
 }
 
 func NewCiscoPSIRT() *RSS {

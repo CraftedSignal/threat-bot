@@ -50,13 +50,35 @@ func asStringMap(v any) (map[string]any, bool) {
 // KEV/confirmed flags but cannot erase them.
 func mergeMapListByIdentityComplete(fm map[string]any, key string, incoming any, identityKeys []string) bool {
 	existing := yamlAnyList(fm[key])
+	mergedExisting := make([]any, 0, len(existing))
 	indices := make(map[string]int, len(existing))
-	for i, item := range existing {
-		if id := mapListIdentity(item, identityKeys); id != "" {
-			indices[id] = i
-		}
-	}
 	changed := false
+	for _, item := range existing {
+		id := mapListIdentity(item, identityKeys)
+		if id == "" {
+			mergedExisting = append(mergedExisting, item)
+			continue
+		}
+		if idx, found := indices[id]; found {
+			changed = true
+			baseMap, baseOK := asStringMap(mergedExisting[idx])
+			itemMap, itemOK := asStringMap(item)
+			if baseOK && itemOK {
+				if mergeMissingMapValues(baseMap, itemMap) {
+					changed = true
+				}
+				mergedExisting[idx] = baseMap
+			} else if !baseOK && itemOK {
+				// Prefer a structured row to a bare identifier when legacy data
+				// contains both forms for the same CVE.
+				mergedExisting[idx] = item
+			}
+			continue
+		}
+		indices[id] = len(mergedExisting)
+		mergedExisting = append(mergedExisting, item)
+	}
+	existing = mergedExisting
 	for _, item := range yamlAnyList(incoming) {
 		id := mapListIdentity(item, identityKeys)
 		if id == "" {

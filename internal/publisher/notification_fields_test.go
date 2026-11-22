@@ -96,6 +96,41 @@ func TestPublicNotificationFieldsEqualPublishedFrontmatter(t *testing.T) {
 	}
 }
 
+func TestPublisherBuffersCompatibleDuplicateCVERowsAsOneCanonicalRecord(t *testing.T) {
+	raw := strings.Replace(notificationDraftYAML,
+		`cves:
+  - id: CVE-2026-4242
+    cvss: 9.8
+    kev: false
+    kev_status: "false"
+`,
+		`cves:
+  - id: CVE-2026-4242
+    cvss: 9.8
+    kev: false
+    kev_status: "false"
+  - id: " cve-2026-4242 "
+    epss: 0.7
+    epss_percentile: 0.9
+    kev: true
+    kev_status: "true"
+`, 1)
+	if raw == notificationDraftYAML {
+		t.Fatal("test fixture did not add the compatible partial CVE row")
+	}
+	p := New("example/feed", "", func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := p.Publish(raw); err != nil {
+		t.Fatalf("compatible duplicate CVE rows failed publication: %v", err)
+	}
+	if len(p.pending) != 1 || len(p.pending[0].CVEs) != 1 {
+		t.Fatalf("publisher buffered duplicate CVE rows: %+v", p.pending)
+	}
+	cve := p.pending[0].CVEs[0]
+	if cve.ID != "CVE-2026-4242" || cve.CVSS != 9.8 || cve.EPSS != 0.7 || cve.EPSSPercentile != 0.9 || !cve.KEV || cve.KEVStatus != "true" {
+		t.Fatalf("publisher lost compatible CVE metadata: %+v", cve)
+	}
+}
+
 func TestPublisherAcceptsAutomatedExploitationWithdrawalWithLegacyQualityGaps(t *testing.T) {
 	raw := strings.Replace(notificationDraftYAML, "  ## Recommendation\n  Upgrade WidgetServer to 4.2.1, which fixes CVE-2026-4242, and restrict the management port to administrator networks until it is patched.\n", "  The advisory includes a proof of concept.\n", 1)
 	raw = strings.Replace(raw, "exploited: true\nexploitation_evidence:\n  status: confirmed_active\n  source_url: https://sensors.example/report\n  observed_at: \"2026-11-18T00:00:00Z\"\n  confidence: medium\n", "exploited: false\nexploitation_evidence:\n  status: unknown\n", 1)

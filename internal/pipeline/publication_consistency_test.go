@@ -162,7 +162,7 @@ func TestValidatePublicationConsistencyRejectsSingleCVEIdentityOnHugeRoundup(t *
 	}
 }
 
-func TestValidatePublicationConsistencyRejectsDuplicateStructuredCVEEntries(t *testing.T) {
+func TestValidatePublicationConsistencyAllowsCompatibleDuplicateCVEEntries(t *testing.T) {
 	raw, err := yaml.Marshal(map[string]any{
 		"title":   "Widget: remote code execution (CVE-2026-129448)",
 		"summary": "An unauthenticated attacker can execute code on Widget.",
@@ -176,8 +176,27 @@ func TestValidatePublicationConsistencyRejectsDuplicateStructuredCVEEntries(t *t
 		t.Fatal(err)
 	}
 	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
+	if strings.Contains(issues, "duplicate CVE-2026-129448") {
+		t.Fatalf("compatible CVE metadata was held instead of being merged: %s", issues)
+	}
+}
+
+func TestValidatePublicationConsistencyRejectsConflictingDuplicateCVEEntries(t *testing.T) {
+	raw, err := yaml.Marshal(map[string]any{
+		"title":   "Widget: remote code execution (CVE-2026-129448)",
+		"summary": "An unauthenticated attacker can execute code on Widget.",
+		"content": "## Overview\nThe issue enables remote code execution.\n\n## Recommendation\nApply the vendor update.",
+		"cves": []any{
+			map[string]any{"id": "CVE-2026-129448", "cvss": 9.8},
+			map[string]any{"id": "CVE-2026-129448", "cvss": 7.5},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
 	if !strings.Contains(issues, "duplicate CVE-2026-129448") {
-		t.Fatalf("duplicate CVE rows were not held for review: %s", issues)
+		t.Fatalf("conflicting CVSS values for one CVE were not held for review: %s", issues)
 	}
 }
 

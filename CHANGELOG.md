@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Merge compatible partial rows for the same CVE before publication, preserving all available metadata while keeping conflicting values under editorial review.
 - Reject roundup briefs that list at least 50 distinct CVEs but title themselves as a single-CVE issue, preventing product-specific narratives from masquerading as the aggregate roundup.
 - Keep source-revision narrative rebuilds within product briefs; rebuilding a roundup or other non-product canonical brief now holds for editorial review instead of replacing its aggregate narrative.
 - Recompute a segmented feed release up to three times when concurrent publication changes a staged path; pending content remains queued if conflicts persist.

@@ -465,6 +465,10 @@ func RenderPublicBriefMarkdown(b BundleBrief, existing []byte) (path string, con
 	if err != nil {
 		return path, nil, b, false, err
 	}
+	b.CVEs, err = normalizePublicCVERows(b.CVEs)
+	if err != nil {
+		return path, nil, b, false, err
+	}
 	b.AffectedProducts = pipeline.CleanProductList(b.AffectedProducts)
 	raw, marshalErr := yaml.Marshal(b)
 	if marshalErr != nil {
@@ -485,6 +489,84 @@ func RenderPublicBriefMarkdown(b BundleBrief, existing []byte) (path string, con
 		return path, nil, b, false, fmt.Errorf("public feed contract %s: %s", issues[0].Code, issues[0].Message)
 	}
 	return path, content, b, true, nil
+}
+
+// normalizePublicCVERows collapses compatible partial rows for the same CVE
+// while preserving every distinct field. Contradictory metadata stays a hard
+// publication error so normalization cannot hide a real editorial conflict.
+func normalizePublicCVERows(cves []BundleCVE) ([]BundleCVE, error) {
+	merged := make([]BundleCVE, 0, len(cves))
+	indices := make(map[string]int, len(cves))
+	for _, incoming := range cves {
+		id := strings.ToUpper(strings.TrimSpace(incoming.ID))
+		if id == "" {
+			merged = append(merged, incoming)
+			continue
+		}
+		incoming.ID = id
+		index, exists := indices[id]
+		if !exists {
+			indices[id] = len(merged)
+			merged = append(merged, incoming)
+			continue
+		}
+		current := &merged[index]
+		if current.Product != "" && incoming.Product != "" && !strings.EqualFold(strings.TrimSpace(current.Product), strings.TrimSpace(incoming.Product)) {
+			return nil, fmt.Errorf("conflicting product values for %s", id)
+		}
+		if current.CVSSVector != "" && incoming.CVSSVector != "" && current.CVSSVector != incoming.CVSSVector {
+			return nil, fmt.Errorf("conflicting CVSS vectors for %s", id)
+		}
+		if current.CVSS != 0 && incoming.CVSS != 0 && current.CVSS != incoming.CVSS {
+			return nil, fmt.Errorf("conflicting CVSS values for %s", id)
+		}
+		if current.EPSS != 0 && incoming.EPSS != 0 && current.EPSS != incoming.EPSS {
+			return nil, fmt.Errorf("conflicting EPSS values for %s", id)
+		}
+		if current.EPSSPercentile != 0 && incoming.EPSSPercentile != 0 && current.EPSSPercentile != incoming.EPSSPercentile {
+			return nil, fmt.Errorf("conflicting EPSS percentiles for %s", id)
+		}
+		currentKEVStatus := strings.ToLower(strings.TrimSpace(current.KEVStatus))
+		incomingKEVStatus := strings.ToLower(strings.TrimSpace(incoming.KEVStatus))
+		if currentKEVStatus != incomingKEVStatus && (kevStatusRank(currentKEVStatus) < 0 || kevStatusRank(incomingKEVStatus) < 0) {
+			return nil, fmt.Errorf("conflicting KEV statuses for %s", id)
+		}
+		if current.Product == "" {
+			current.Product = incoming.Product
+		}
+		if current.CVSSVector == "" {
+			current.CVSSVector = incoming.CVSSVector
+		}
+		if current.CVSS == 0 {
+			current.CVSS = incoming.CVSS
+		}
+		if current.EPSS == 0 {
+			current.EPSS = incoming.EPSS
+		}
+		if current.EPSSPercentile == 0 {
+			current.EPSSPercentile = incoming.EPSSPercentile
+		}
+		current.KEV = current.KEV || incoming.KEV
+		if kevStatusRank(incomingKEVStatus) > kevStatusRank(currentKEVStatus) {
+			current.KEVStatus = incomingKEVStatus
+		} else if current.KEVStatus == "" {
+			current.KEVStatus = incomingKEVStatus
+		}
+	}
+	return merged, nil
+}
+
+func kevStatusRank(status string) int {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "true", "listed", "known_exploited":
+		return 2
+	case "false", "not_listed", "not_known_exploited":
+		return 1
+	case "":
+		return 0
+	default:
+		return -1
+	}
 }
 
 type existingPublicIdentity struct {

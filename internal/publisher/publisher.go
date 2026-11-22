@@ -201,10 +201,11 @@ func (p *Publisher) prepareBrief(briefYAML string) (*BundleBrief, error) {
 		return nil, fmt.Errorf("publication contract: %w", err)
 	}
 	brief.Rules = p.validRules(brief)
-	if _, _, _, _, err := RenderPublicBriefMarkdown(*brief, nil); err != nil {
+	_, _, rendered, _, err := RenderPublicBriefMarkdown(*brief, nil)
+	if err != nil {
 		return nil, fmt.Errorf("publication contract: %w", err)
 	}
-	return brief, nil
+	return &rendered, nil
 }
 
 // validRules returns the brief's rules that are valid Sigma, dropping the

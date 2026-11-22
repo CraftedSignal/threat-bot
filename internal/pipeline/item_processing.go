@@ -32,6 +32,27 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 
 	workStarted := false
 	var mergeExtraction *ExtractionResult
+	var groundingIssueHistory []string
+	var staleCheckpointInputKey string
+	defer func() {
+		// Keep the previous checkpoint (and its normalized grounding findings)
+		// until the replacement candidate is durable. A transient failure during
+		// quality, extraction, or assembly must not reset the repeated-finding
+		// guard on the next poll.
+		if resultErr != nil || staleCheckpointInputKey == "" {
+			return
+		}
+		current, err := p.db.GetProcessingCheckpoint(item.SourceID)
+		if err != nil {
+			p.logger.Error("checking stale processing checkpoint", "source_id", item.SourceID, "error", err)
+			return
+		}
+		if current != nil && current.InputKey == staleCheckpointInputKey {
+			if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
+				p.logger.Error("deleting completed stale processing checkpoint", "source_id", item.SourceID, "error", err)
+			}
+		}
+	}()
 	defer func() {
 		if !workStarted {
 			return
@@ -129,10 +150,27 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				mergeExtraction = cloneExtraction(state.Extraction)
 				p.logger.Info("resuming merge candidate", "source_id", item.SourceID, "draft_id", state.MergeDraftID, "stage", "merge_assessment")
 			} else {
+				// Evidence changes require a fresh brief and grounding check, but
+				// they must not erase the same unresolved product-level finding.
+				// Carry only normalized issue identities; never reuse a verdict
+				// or repaired brief from the old evidence.
+				groundingIssueHistory = append([]string(nil), state.GroundingIssueHistory...)
+				if len(groundingIssueHistory) > 0 {
+					staleCheckpointInputKey = cp.InputKey
+				} else if mergeExtraction == nil {
+					// Preserve the established invalidation semantics for ordinary
+					// checkpoints. Only checkpoints carrying repeated-finding state
+					// need to survive an interrupted rebuild.
+					if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
+						return err
+					}
+				}
 				p.logger.Info("source evidence or merge target changed; rebuilding candidate", "source_id", item.SourceID)
 			}
-		}
-		if mergeExtraction == nil {
+		} else if mergeExtraction == nil {
+			// A policy transition has always invalidated the checkpoint before
+			// reevaluation; retain that behavior because its cached candidate
+			// may violate the new publication or evidence contract.
 			if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
 				return err
 			}
@@ -260,7 +298,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Warn("extraction failed, continuing without", "source_id", item.SourceID, "error", extractErr)
 		}
 	}
-	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, RebuildDraftID: rebuildDraftID}
+	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, RebuildDraftID: rebuildDraftID}
 	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
 }
 

@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Keep source-revision narrative rebuilds within product briefs; rebuilding a roundup or other non-product canonical brief now holds for editorial review instead of replacing its aggregate narrative.
 - Recompute a segmented feed release up to three times when concurrent publication changes a staged path; pending content remains queued if conflicts persist.
 - Back off repeated source-evidence refresh failures exponentially, persisting attempts per input revision and capping automatic retries at 12 hours.
 - Publish a narrow, machine-recorded withdrawal when exploitation evidence is only a public PoC listing and the brief text does not claim observed exploitation, even if that already-published brief has unrelated narrative-quality gaps; structural publication checks remain enforced.

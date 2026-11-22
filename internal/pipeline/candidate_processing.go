@@ -152,7 +152,8 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 
 	var groundingResult *GroundingResult
 	var groundingErr error
-	if len(state.Issues) > 0 {
+	hadPriorIssues := len(state.Issues) > 0
+	if hadPriorIssues {
 		groundingResult = &GroundingResult{Issues: state.Issues}
 	} else {
 		groundingResult, groundingErr = p.grounding.Check(llm.WithCallMetadata(ctx, llm.CallMetadata{Stage: "grounding"}), item.Title, p.groundingEvidence(item, cleanedYAML), groundingView(cleanedYAML, item.URL))
@@ -211,6 +212,12 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		}
 		if !groundingResult.Grounded {
 			p.decisions.record(outcomeRejectedUngrounded)
+			history, repeated := trackGroundingIssueCycle(state.GroundingIssueHistory, groundingResult.Issues)
+			if repeated {
+				p.logger.Warn("quarantining repeated grounding finding", "source_id", item.SourceID, "attempt", attempts, "issues", groundingResult.Issues)
+				return p.quarantineUngrounded(item, cleanedYAML, &UngroundedBriefError{Attempts: attempts, Issues: groundingResult.Issues})
+			}
+			state.GroundingIssueHistory = history
 			state.Issues = groundingResult.Issues
 			if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 				return err

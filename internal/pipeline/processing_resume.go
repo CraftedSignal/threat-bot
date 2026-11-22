@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/craftedsignal/threat-bot/internal/llm"
@@ -18,24 +19,89 @@ import (
 const processingPolicyVersion = "evidence-quality-2026-11-15-v5"
 
 type processingCandidate struct {
-	Stage             string
-	PolicyKey         string
-	EvidenceKey       string
-	AttemptID         string
-	Item              scraper.RawItem
-	Extraction        *ExtractionResult
-	PreCVEs           []string
-	Score, Confidence float64
-	BriefYAML         string
-	Issues            []string
-	RebuildDraftID    string
-	ReviewHold        bool
-	MergeDraftID      string
-	MergeTargetKey    string
-	MergeAttempts     int
-	GroundingFailure  *processingGroundingFailure
-	ClaimAssessment   *processingClaimAssessment
-	RefreshRetries    map[string]time.Time
+	Stage                 string
+	PolicyKey             string
+	EvidenceKey           string
+	AttemptID             string
+	Item                  scraper.RawItem
+	Extraction            *ExtractionResult
+	PreCVEs               []string
+	Score, Confidence     float64
+	BriefYAML             string
+	Issues                []string
+	GroundingIssueHistory []string
+	RebuildDraftID        string
+	ReviewHold            bool
+	MergeDraftID          string
+	MergeTargetKey        string
+	MergeAttempts         int
+	GroundingFailure      *processingGroundingFailure
+	ClaimAssessment       *processingClaimAssessment
+	RefreshRetries        map[string]time.Time
+}
+
+// trackGroundingIssueCycle records stable identities for rejected grounding
+// findings. Missing-fact findings are keyed by field and subject so harmless
+// changes to version prose do not buy another repair cycle. Findings without
+// the canonical missing-fact shape are intentionally left to the bounded retry
+// budget because their text does not expose a stable subject consistently.
+func trackGroundingIssueCycle(history, issues []string) ([]string, bool) {
+	seen := make(map[string]struct{}, len(history))
+	for _, identity := range history {
+		seen[identity] = struct{}{}
+	}
+	next := append([]string(nil), history...)
+	repeated := false
+	for _, issue := range issues {
+		identity := groundingIssueIdentity(issue)
+		if identity == "" {
+			continue
+		}
+		if _, ok := seen[identity]; ok {
+			repeated = true
+			continue
+		}
+		seen[identity] = struct{}{}
+		next = append(next, identity)
+	}
+	return next, repeated
+}
+
+func groundingIssueIdentity(issue string) string {
+	issue = strings.ToLower(strings.Join(strings.Fields(issue), " "))
+	field, detail, hasField := strings.Cut(issue, ":")
+	const marker = "missing source-supported fact for "
+	if hasField {
+		if _, subjectAndReason, ok := strings.Cut(strings.TrimSpace(detail), marker); ok {
+			subject, _, _ := strings.Cut(subjectAndReason, ":")
+			if versionDetail := strings.Index(subject, " ("); versionDetail >= 0 {
+				qualifier := strings.TrimSpace(subject[versionDetail+2:])
+				if isVersionRangeQualifier(qualifier) {
+					subject = subject[:versionDetail]
+				}
+			}
+			subject = strings.TrimSpace(subject)
+			if subject != "" {
+				return strings.TrimSpace(field) + ":" + subject
+			}
+		}
+	}
+	return ""
+}
+
+func isVersionRangeQualifier(qualifier string) bool {
+	qualifier = strings.ToLower(strings.TrimSpace(qualifier))
+	for _, prefix := range []string{"<", ">", "version ", "versions ", "before ", "prior to ", "up to ", "at least ", "less than "} {
+		if strings.HasPrefix(qualifier, prefix) {
+			return true
+		}
+	}
+	for _, suffix := range []string{" and earlier", " or earlier", " and later", " or later"} {
+		if strings.HasSuffix(qualifier, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func configuredRetryBackoff(d time.Duration) time.Duration {

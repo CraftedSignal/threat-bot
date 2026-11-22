@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAtomicPublicationHidesStagedWritesUntilRefAdvance(t *testing.T) {
@@ -278,15 +279,27 @@ func TestFlushConflictPreservesQueuedBriefAndConcurrentManifest(t *testing.T) {
 	db := outboxTestDB(t)
 	repo, p := newFakeFeedRepo(t)
 	p.outbox, p.UseSegmented = db, true
-	concurrent := []byte(`{"version":"concurrent"}`)
-	repo.racePut[manifestPath] = concurrent
+	patches := 0
+	interceptPublicationAPI(t, repo, p, func(w http.ResponseWriter, req *http.Request) bool {
+		if req.Method != http.MethodPatch {
+			return false
+		}
+		patches++
+		repo.mu.Lock()
+		repo.files[manifestPath] = []byte(fmt.Sprintf(`{"version":"concurrent-%d"}`, patches))
+		repo.head = fmt.Sprintf("concurrent-%d", patches)
+		repo.mu.Unlock()
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Update is not a fast forward"}`))
+		return true
+	})
 	if err := p.Publish(outboxBriefYAML("queued-brief", "Queued")); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Flush(); err == nil {
-		t.Fatal("expected touched manifest conflict")
+		t.Fatal("expected repeated changed-manifest conflicts")
 	}
-	if string(repo.files[manifestPath]) != string(concurrent) {
+	if string(repo.files[manifestPath]) != fmt.Sprintf(`{"version":"concurrent-%d"}`, patches) {
 		t.Fatal("concurrent manifest was overwritten")
 	}
 	if len(p.pending) != 1 || len(outboxIDs(t, db)) != 1 {
@@ -295,8 +308,33 @@ func TestFlushConflictPreservesQueuedBriefAndConcurrentManifest(t *testing.T) {
 	if published, pushed := p.NewestPublicBrief(); !published.IsZero() || !pushed.IsZero() {
 		t.Fatal("failed publication updated success cache")
 	}
-	if repo.refUpdates != 0 {
+	if repo.refUpdates != 0 || patches < 3 {
 		t.Fatal("conflicting batch was partially published")
+	}
+}
+
+func TestFlushRecomputesAfterOneConcurrentManifestChange(t *testing.T) {
+	repo, p := newFakeFeedRepo(t)
+	p.UseSegmented = true
+	now := time.Now().UTC().Truncate(time.Second)
+	key := SegmentKey(now)
+	repo.putSegment(t, key, BundleBrief{ID: "concurrent-brief", Slug: "concurrent-brief", Title: "Concurrent", PublishedAt: now.Format(time.RFC3339)})
+	manifest, err := json.Marshal(&SegmentManifest{Version: "v1", Segments: []SegmentEntry{{Path: segmentPath(key), BriefCount: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.racePut[manifestPath] = manifest
+	p.pending = []BundleBrief{{ID: "queued-brief", Slug: "queued-brief", Title: "Queued", PublishedAt: now.Format(time.RFC3339)}}
+
+	if err := p.Flush(); err != nil {
+		t.Fatalf("flush should recompute after the changed manifest: %v", err)
+	}
+	briefs := repo.segment(t, key).Briefs
+	if len(briefs) != 2 {
+		t.Fatalf("published segment has %d briefs, want the concurrent and queued briefs: %+v", len(briefs), briefs)
+	}
+	if len(p.pending) != 0 || repo.refUpdates != 1 {
+		t.Fatalf("pending=%d ref updates=%d, want cleared pending and one successful commit", len(p.pending), repo.refUpdates)
 	}
 }
 

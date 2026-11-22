@@ -204,16 +204,30 @@ func TestDraftPublicationCompletionSurvivesFailedFlushAndRestart(t *testing.T) {
 	if err := p.PublishDraft(outboxBriefYAML("brief-a", "A"), "draft-a", "claim-a"); err != nil {
 		t.Fatal(err)
 	}
-	repo.racePut[manifestPath] = []byte(`{"version":"concurrent"}`)
+	directAPI := p.apiURL
+	conflicts := 0
+	interceptPublicationAPI(t, repo, p, func(w http.ResponseWriter, req *http.Request) bool {
+		if req.Method != http.MethodPatch {
+			return false
+		}
+		conflicts++
+		repo.mu.Lock()
+		repo.files[manifestPath] = []byte(fmt.Sprintf(`{"version":"concurrent-%d"}`, conflicts))
+		repo.head = fmt.Sprintf("concurrent-%d", conflicts)
+		repo.mu.Unlock()
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"message":"Update is not a fast forward"}`))
+		return true
+	})
 	if err := p.Flush(); err == nil {
-		t.Fatal("expected conflicting flush")
+		t.Fatal("expected persistently conflicting flush")
 	}
-	if len(completed) != 0 || len(outboxIDs(t, db)) != 1 {
+	if len(completed) != 0 || len(outboxIDs(t, db)) != 1 || conflicts < 3 {
 		t.Fatal("failed flush completed or lost the draft")
 	}
 
 	fresh := New(p.repoSlug, p.publicKey, p.tokenFn, p.logger, WithOutbox(db), WithDraftPublished(complete))
-	fresh.apiURL = p.apiURL
+	fresh.apiURL = directAPI
 	fresh.UseSegmented = true
 	if n, err := fresh.RestoreOutbox(); err != nil || n != 1 {
 		t.Fatalf("restore=%d,%v", n, err)

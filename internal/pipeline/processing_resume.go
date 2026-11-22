@@ -38,6 +38,7 @@ type processingCandidate struct {
 	GroundingFailure      *processingGroundingFailure
 	ClaimAssessment       *processingClaimAssessment
 	RefreshRetries        map[string]time.Time
+	RefreshRetryAttempts  map[string]int
 }
 
 // trackGroundingIssueCycle records stable identities for rejected grounding

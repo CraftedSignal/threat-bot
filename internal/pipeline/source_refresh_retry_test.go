@@ -149,6 +149,49 @@ func TestSourceRefreshOutageBacksOffDurably(t *testing.T) {
 	}
 }
 
+func TestRepeatedSourceRefreshOutageUsesCappedExponentialBackoff(t *testing.T) {
+	f := newRefreshRetryFixture(t, false)
+	want := []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour, 12 * time.Hour, 12 * time.Hour}
+	key := f.pipeline().processingInputKey(f.item)
+	for attempt, delay := range want {
+		if err := f.pipeline().processItem(context.Background(), f.item); err != nil {
+			t.Fatal(err)
+		}
+		var saved struct {
+			RefreshRetries       map[string]time.Time
+			RefreshRetryAttempts map[string]int
+		}
+		if err := yaml.Unmarshal([]byte(f.checkpoint(t).Payload), &saved); err != nil {
+			t.Fatal(err)
+		}
+		got := time.Until(saved.RefreshRetries[key])
+		if got < delay-time.Second || got > delay+time.Second {
+			t.Fatalf("attempt %d retry delay=%s, want %s", attempt+1, got.Round(time.Second), delay)
+		}
+		if saved.RefreshRetryAttempts[key] != attempt+1 {
+			t.Fatalf("attempt %d persisted retry count=%d", attempt+1, saved.RefreshRetryAttempts[key])
+		}
+		if attempt == len(want)-1 {
+			break
+		}
+		var payload map[string]any
+		if err := yaml.Unmarshal([]byte(f.checkpoint(t).Payload), &payload); err != nil {
+			t.Fatal(err)
+		}
+		retries := payload["refreshretries"].(map[string]any)
+		retries[key] = time.Now().Add(-time.Second)
+		b, err := yaml.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp := f.checkpoint(t)
+		cp.Payload = string(b)
+		if err := f.db.PutProcessingCheckpoint(*cp); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestChangedSourceInputBypassesRefreshBackoff(t *testing.T) {
 	f := newRefreshRetryFixture(t, false)
 	p := f.pipeline()

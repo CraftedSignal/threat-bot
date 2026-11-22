@@ -36,6 +36,7 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 	title := publicationString(brief["title"])
 	summary := publicationString(brief["summary"])
 	content := publicationString(brief["content"])
+	issues = append(issues, publicationRoundupIdentityIssues(brief, title)...)
 	if verification, ok := asStringMap(brief["cve_verification"]); ok {
 		for _, id := range publicationCVEs(brief["cves"], title+"\n"+summary+"\n"+content) {
 			entry, ok := asStringMap(verification[id])
@@ -97,6 +98,30 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 		}
 	}
 	return append(issues, publicationQualityIssues(brief)...)
+}
+
+// A roundup with dozens of CVEs cannot be titled as though it were a single
+// vulnerability. This guards against a product-specific source narrative
+// replacing the aggregate identity while the full roundup CVE inventory stays
+// attached. Smaller vulnerability chains and aggregate titles are unaffected.
+func publicationRoundupIdentityIssues(brief map[string]any, title string) []string {
+	tags := publicationUnique(yamlStringList(brief["tags"]))
+	roundup := false
+	for _, tag := range tags {
+		if tag == "roundup" {
+			roundup = true
+			break
+		}
+	}
+	if !roundup {
+		return nil
+	}
+	cves := publicationCVEs(brief["cves"], "")
+	titleCVEs := publicationCVEs(nil, title)
+	if len(cves) < 50 || len(titleCVEs) != 1 {
+		return nil
+	}
+	return []string{fmt.Sprintf("roundup lists %d CVEs but its title identifies only %s; use an aggregate title", len(cves), titleCVEs[0])}
 }
 
 func safeExploitationWithdrawalUpdate(brief map[string]any) bool {

@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidatePublicationConsistency(t *testing.T) {
@@ -130,6 +133,62 @@ action_plan:
 			}
 			if len(issues) == 0 || !strings.Contains(strings.Join(issues, " "), tt.contains) {
 				t.Fatalf("issues = %v, want %q", issues, tt.contains)
+			}
+		})
+	}
+}
+
+func TestValidatePublicationConsistencyRejectsSingleCVEIdentityOnHugeRoundup(t *testing.T) {
+	cves := make([]string, 100)
+	for i := range cves {
+		cves[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
+	}
+	cves[0] = "CVE-2026-111306"
+	raw, err := yaml.Marshal(map[string]any{
+		"title":   "Microsoft Office Word heap-based buffer overflow (CVE-2026-111306)",
+		"summary": "A heap-based buffer overflow in Microsoft Office Word.",
+		"content": "## Overview\nA heap-based buffer overflow in Microsoft Office Word, tracked as CVE-2026-111306.\n\n## Recommendation\nApply current Microsoft Office updates.",
+		"tags":    []string{"roundup", "Microsoft", "Office"},
+		"cves":    cves,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
+	if !strings.Contains(issues, "roundup") {
+		t.Fatalf("single-CVE title accepted for a 100-CVE roundup: %s", issues)
+	}
+}
+
+func TestValidatePublicationConsistencyAllowsSmallCVEChainAndGenericLargeRoundup(t *testing.T) {
+	for name, doc := range map[string]map[string]any{
+		"small chain": {
+			"title":   "Widget: two-CVE remote code execution chain (CVE-2026-10001)",
+			"summary": "Two related vulnerabilities combine into an attack chain.",
+			"content": "## Overview\nThe chain uses CVE-2026-10001 and CVE-2026-10002.\n\n## Recommendation\nApply the vendor patch.",
+			"tags":    []string{"roundup"}, "cves": []string{"CVE-2026-10001", "CVE-2026-10002"},
+		},
+		"generic large roundup": {
+			"title":   "Microsoft Security Updates - November 2026",
+			"summary": "Microsoft's November security updates address vulnerabilities across supported products.",
+			"content": "## Overview\nThe monthly security release addresses vulnerabilities across Microsoft products.\n\n## Recommendation\nPrioritize the vendor's actively exploited issues and apply the cumulative updates through the normal patch process.",
+			"tags":    []string{"roundup", "Microsoft"}, "cves": func() []string {
+				ids := make([]string, 100)
+				for i := range ids {
+					ids[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
+				}
+				return ids
+			}(),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := yaml.Marshal(doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
+			if strings.Contains(issues, "roundup") {
+				t.Fatalf("valid roundup/chain was rejected: %s", issues)
 			}
 		})
 	}

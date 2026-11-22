@@ -67,6 +67,20 @@ func TestGroundingEvidenceKeepsMissingAndCrossRecordCoverageExplicit(t *testing.
 	}
 }
 
+func TestUnrenderableScopeGuidanceStaysInsideThePrimaryEvidenceBudget(t *testing.T) {
+	v := NewCVEVerifier(nil, nil)
+	var facts []cnaSourceFact
+	for i := 0; i < 24; i++ {
+		product := "Linux product " + strings.Repeat("x", 700) + string(rune('a'+i))
+		facts = append(facts, affectedFact("CVE-2026-99462", product, `{"product":"`+product+`","versions":[{"version":"abcdef0123456789abcdef0123456789abcdef01","lessThan":"0123456789abcdef0123456789abcdef01234567","status":"affected","versionType":"git"}]}`))
+	}
+	v.cache["CVE-2026-99462"] = &CVEMeta{Exists: true, Verification: CVEVerification{Status: "verified", Source: "cve_program"}, CNAFacts: facts}
+	evidence := (&Pipeline{cveVerifier: v}).verifiedPrimaryEvidence([]string{"CVE-2026-99462"})
+	if len(evidence) > maxCNAEvidenceBytes {
+		t.Fatalf("primary evidence including machine guidance exceeds budget: %d > %d", len(evidence), maxCNAEvidenceBytes)
+	}
+}
+
 func TestCNASourceFactsKeepMultiProductRemediationUnassignedAndBounded(t *testing.T) {
 	var record cnaSourceRecord
 	if err := json.Unmarshal([]byte(`{"affected":[{"vendor":"Acme","product":"Widget A","versions":[{"version":"1","status":"affected","lessThan":"2"}]},{"vendor":"Acme","product":"Widget B","versions":[{"version":"3","status":"affected","lessThan":"4"}]}],"solutions":[{"lang":"en","value":"Upgrade Widget A to version 2."}]}`), &record); err != nil {

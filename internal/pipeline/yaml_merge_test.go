@@ -51,3 +51,15 @@ func TestDedupeExistingCVEEntriesPrefersStructuredRowToBareID(t *testing.T) {
 		t.Fatalf("structured fields were not preserved: %#v", cleaned)
 	}
 }
+
+func TestDuplicateCVEOnlyCleanupDoesNotReplaceOtherUpdateSummary(t *testing.T) {
+	if !duplicateCVEOnlyCleanup(true, false, false) {
+		t.Fatal("duplicate-only cleanup was not identified")
+	}
+	if duplicateCVEOnlyCleanup(true, false, true) {
+		t.Fatal("cleanup plus another signal would hide the classified update reason")
+	}
+	if duplicateCVEOnlyCleanup(true, true, false) {
+		t.Fatal("cleanup plus a newly added CVE should keep the classified summary")
+	}
+}

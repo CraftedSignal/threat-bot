@@ -158,10 +158,11 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	assessmentChanged := mergeMapIfMissing(base, incoming, "source_assessment")
 	qaChanged := mergeMapIfMissing(base, incoming, "qa_status")
 
-	changed := narrativeChanged || addedVendors || addedProducts || addedOS || addedRefs || addedTags ||
-		addedCPEs || addedPOCRefs || addedPrioritySignals || addedRules || addedTTPs || addedCVEs || cleanedCVEs || addedIOCs ||
+	otherChanged := narrativeChanged || addedVendors || addedProducts || addedOS || addedRefs || addedTags ||
+		addedCPEs || addedPOCRefs || addedPrioritySignals || addedRules || addedTTPs || addedIOCs ||
 		severityChanged || actorChanged || pocChanged || exploitationChanged || priorityChanged || actionPlanChanged ||
 		assessmentChanged || qaChanged
+	changed := otherChanged || addedCVEs || cleanedCVEs
 	if !changed {
 		note := fmt.Sprintf("[corroborated] %s %s", item.Source, item.URL)
 		return p.db.AppendDraftReferenceWithSource(draftID, note, item.SourceID)
@@ -181,7 +182,7 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	if level == "L0" {
 		level = "L1"
 	}
-	if cleanedCVEs && !addedCVEs {
+	if duplicateCVEOnlyCleanup(cleanedCVEs, addedCVEs, otherChanged) {
 		summary = "corrected duplicate CVE entries"
 	}
 	if level != "L3" && (addedRules || actionPlanChanged) {
@@ -220,6 +221,10 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 		}
 	}
 	return nil
+}
+
+func duplicateCVEOnlyCleanup(cleanedCVEs, addedCVEs, otherChanged bool) bool {
+	return cleanedCVEs && !addedCVEs && !otherChanged
 }
 
 // logMergeFailure logs a failed merge. A merge the relevance check refused is

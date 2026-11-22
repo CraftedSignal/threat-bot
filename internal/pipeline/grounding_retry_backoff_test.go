@@ -38,6 +38,34 @@ func TestGroundingRetriesBackOffDurablyAcrossRestarts(t *testing.T) {
 			}
 			cfg := Config{DB: db, LLMClient: client, QualityThreshold: 3, Logger: quietLogger()}
 			item := scraper.RawItem{SourceID: "backoff:" + failure, Source: "cisa-kev", Title: "Vendor notice", Content: strings.Repeat("Confirmed vendor notice. ", 30), SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
+			if failure == "rejected" {
+				start := time.Now()
+				if err := New(cfg).processItem(context.Background(), item); err != nil {
+					t.Fatal(err)
+				}
+				cp, err := db.GetProcessingCheckpoint(item.SourceID)
+				if err != nil || cp == nil || cp.RetryAt.Before(start.Add(15*time.Minute)) {
+					t.Fatalf("first rejection was not retained with backoff: checkpoint=%+v err=%v", cp, err)
+				}
+				before := calls
+				if err := New(cfg).processItem(context.Background(), item); err != nil || calls != before {
+					t.Fatalf("retry spent work before backoff: err=%v calls=%d/%d", err, calls, before)
+				}
+				cp.RetryAt = time.Now().Add(-time.Second)
+				if err := db.PutProcessingCheckpoint(*cp); err != nil {
+					t.Fatal(err)
+				}
+				if err := New(cfg).processItem(context.Background(), item); err != nil {
+					t.Fatal(err)
+				}
+				if calls != before || assemblies != 1 {
+					t.Fatalf("repeated rejection bought more paid work: calls=%d/%d assemblies=%d", calls, before, assemblies)
+				}
+				if _, quarantined, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !quarantined {
+					t.Fatalf("repeated rejection not quarantined: quarantined=%v err=%v", quarantined, err)
+				}
+				return
+			}
 			for attempt, delay := range []time.Duration{15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour} {
 				start := time.Now()
 				err := New(cfg).processItem(context.Background(), item)

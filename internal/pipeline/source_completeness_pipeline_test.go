@@ -101,7 +101,7 @@ func completenessVerifier(t *testing.T) *CVEVerifier {
 	return v
 }
 
-func TestSourceCompletenessBoundedRepairSurvivesDatabaseRestart(t *testing.T) {
+func TestSourceCompletenessRepeatedRepairFindingQuarantinesAfterDatabaseRestart(t *testing.T) {
 	for _, rejectFinal := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reject_final_%v", rejectFinal), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "state.db")
@@ -145,8 +145,8 @@ func TestSourceCompletenessBoundedRepairSurvivesDatabaseRestart(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if client.checks != 3 || client.repairs != 2 {
-				t.Fatalf("restart rebuilt or exceeded budget: checks=%d repairs=%d", client.checks, client.repairs)
+			if client.checks != 2 || client.repairs != 1 {
+				t.Fatalf("restart repeated a paid repair for the same finding: checks=%d repairs=%d", client.checks, client.repairs)
 			}
 			drafts := 0
 			for draft, rowErr := range db.ActiveDraftsSince(time.Time{}) {
@@ -160,15 +160,11 @@ func TestSourceCompletenessBoundedRepairSurvivesDatabaseRestart(t *testing.T) {
 					}
 				}
 			}
-			if rejectFinal {
-				if drafts != 0 {
-					t.Fatal("incomplete repair became a draft")
-				}
-				if _, held, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !held {
-					t.Fatalf("exhausted omission was not retained: %v", err)
-				}
-			} else if drafts != 1 {
-				t.Fatalf("supported completeness repair produced %d drafts", drafts)
+			if drafts != 0 {
+				t.Fatalf("repeatedly rejected repair became a draft: %d", drafts)
+			}
+			if _, held, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !held {
+				t.Fatalf("repeated omission was not quarantined: %v", err)
 			}
 		})
 	}

@@ -16,7 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestGroundingRetryResumesCandidateAcrossPipelineRestart(t *testing.T) {
+func TestGroundingRetryQuarantinesPersistedRepeatedFindingAcrossPipelineRestart(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()
 	assemblies, repairs, checks := 0, 0, 0
@@ -47,19 +47,11 @@ func TestGroundingRetryResumesCandidateAcrossPipelineRestart(t *testing.T) {
 	if err := New(cfg).processItem(context.Background(), second); err != nil {
 		t.Fatal(err)
 	}
-	if assemblies != 1 || repairs != 2 || checks != 3 {
-		t.Fatalf("full rebuild on retry: assemblies=%d repairs=%d checks=%d", assemblies, repairs, checks)
+	if reason, ok, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !ok || !strings.Contains(reason, "unsupported claim") {
+		t.Fatalf("repeated finding was not quarantined: quarantined=%v reason=%q err=%v", ok, reason, err)
 	}
-	cp, err := db.GetProcessingCheckpoint(item.SourceID)
-	if err != nil || cp == nil || cp.InputKey != New(cfg).processingInputKey(second) {
-		t.Fatalf("checkpoint absent: %v %v", cp, err)
-	}
-	cfg.ProcessingPolicy = "changed model or policy"
-	if err := New(cfg).processItem(context.Background(), item); err != nil {
-		t.Fatal(err)
-	}
-	if assemblies != 2 {
-		t.Fatalf("policy change reused stale candidate: assemblies=%d", assemblies)
+	if assemblies != 1 || repairs != 1 || checks != 2 {
+		t.Fatalf("retry repeated paid grounding work: assemblies=%d repairs=%d checks=%d", assemblies, repairs, checks)
 	}
 }
 

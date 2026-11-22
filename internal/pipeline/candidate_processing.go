@@ -30,6 +30,15 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		state.GroundingIssueHistory = nil
 	}
 	state.GroundingFindingPolicy = groundingFindingPolicyVersion
+	if state.GroundingRecheckFailed && len(state.Issues) > 0 {
+		_, repeated := trackGroundingIssueCycle(state.GroundingIssueHistory, state.Issues)
+		if repeated {
+			attempts := max(1, state.GroundingAttemptCount)
+			p.logger.Warn("quarantining repeated grounding finding", "source_id", state.Item.SourceID, "attempt", attempts, "issues", state.Issues)
+			return p.quarantineUngrounded(state.Item, state.BriefYAML, &UngroundedBriefError{Attempts: attempts, Issues: state.Issues})
+		}
+		state.GroundingRecheckFailed = false
+	}
 	item, extraction, preCVEs := state.Item, state.Extraction, state.PreCVEs
 	score, confidence, briefYAML := state.Score, state.Confidence, state.BriefYAML
 	var err error
@@ -138,6 +147,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		return p.quarantineUngrounded(item, cleanedYAML, &UngroundedBriefError{Attempts: p.maxGroundingAttempts, Issues: []string{"grounding retry budget exhausted"}})
 	}
 	retryDelay := p.groundingRetryDelay(attempts)
+	state.GroundingAttemptCount = attempts
 	if attempts > 1 {
 		// Persist the longer delay before making a provider call so an outage
 		// or process restart cannot fall back to the first-attempt schedule.
@@ -207,6 +217,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		cleanedYAML = p.injectSourceRanges(cleanedYAML, item)
 		cleanedYAML = normalizeDetectionSeverity(cleanedYAML, item)
 		state.BriefYAML, state.Issues = cleanedYAML, nil
+		state.GroundingRecheckFailed = false
 		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 			return err
 		}
@@ -227,6 +238,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 			}
 			state.GroundingIssueHistory = history
 			state.Issues = groundingResult.Issues
+			state.GroundingRecheckFailed = true
 			if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
 				return err
 			}
@@ -247,6 +259,8 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 
 	state.Issues = nil
 	state.GroundingIssueHistory = nil
+	state.GroundingAttemptCount = 0
+	state.GroundingRecheckFailed = false
 	state.BriefYAML = cleanedYAML
 	if err := p.saveCandidate(key, state, time.Time{}); err != nil {
 		return err

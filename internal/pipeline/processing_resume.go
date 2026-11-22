@@ -35,6 +35,8 @@ type processingCandidate struct {
 	Issues                 []string
 	GroundingFindingPolicy string
 	GroundingIssueHistory  []string
+	GroundingAttemptCount  int
+	GroundingRecheckFailed bool
 	RebuildDraftID         string
 	ReviewHold             bool
 	MergeDraftID           string
@@ -48,9 +50,9 @@ type processingCandidate struct {
 
 // trackGroundingIssueCycle records stable identities for rejected grounding
 // findings. Missing-fact findings are keyed by field and subject so harmless
-// changes to version prose do not buy another repair cycle. Findings without
-// the canonical missing-fact shape are intentionally left to the bounded retry
-// budget because their text does not expose a stable subject consistently.
+// changes to version prose do not buy another repair cycle. Other findings
+// use their normalized full text, avoiding subject guesses while still stopping
+// exact repeated rejections.
 func trackGroundingIssueCycle(history, issues []string) ([]string, bool) {
 	seen := make(map[string]struct{}, len(history))
 	for _, identity := range history {
@@ -92,7 +94,17 @@ func groundingIssueIdentity(issue string) string {
 			}
 		}
 	}
-	return ""
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return ""
+	}
+	if !hasField {
+		field = "issue"
+	}
+	if strings.TrimSpace(field) == "" {
+		return ""
+	}
+	return strings.TrimSpace(field) + ":" + issue
 }
 
 func isVersionRangeQualifier(qualifier string) bool {

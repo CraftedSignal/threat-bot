@@ -240,7 +240,7 @@ func TestPipelineQuarantinesAfterMaxGroundingAttempts(t *testing.T) {
 	}
 	pipe := New(Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 3, RetryBackoff: -time.Second, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	item := scraper.RawItem{SourceID: "kev:cap", Source: "cisa-kev", Title: "Vendor security advisory", Content: strings.Repeat("Confirmed vendor notice. ", 30), SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= 2; attempt++ {
 		if err := pipe.Process(context.Background(), []scraper.RawItem{item}); err != nil {
 			t.Fatal(err)
 		}
@@ -248,7 +248,7 @@ func TestPipelineQuarantinesAfterMaxGroundingAttempts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := attempt == 3; seen != want {
+		if want := attempt == 2; seen != want {
 			t.Fatalf("attempt %d: seen=%v want %v", attempt, seen, want)
 		}
 	}
@@ -256,7 +256,7 @@ func TestPipelineQuarantinesAfterMaxGroundingAttempts(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("not quarantined: ok=%v err=%v", ok, err)
 	}
-	if !strings.Contains(reason, "ungrounded after 3 attempts") {
+	if !strings.Contains(reason, "ungrounded after 1 attempts") {
 		t.Errorf("reason = %q", reason)
 	}
 }

@@ -238,6 +238,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	}
 
 	state.Issues = nil
+	state.GroundingIssueHistory = nil
 	state.BriefYAML = cleanedYAML
 	if err := p.saveCandidate(key, state, time.Time{}); err != nil {
 		return err

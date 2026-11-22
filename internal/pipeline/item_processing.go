@@ -32,6 +32,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 
 	workStarted := false
 	var mergeExtraction *ExtractionResult
+	var groundingIssueHistory []string
 	defer func() {
 		if !workStarted {
 			return
@@ -129,6 +130,11 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				mergeExtraction = cloneExtraction(state.Extraction)
 				p.logger.Info("resuming merge candidate", "source_id", item.SourceID, "draft_id", state.MergeDraftID, "stage", "merge_assessment")
 			} else {
+				// Evidence changes require a fresh brief and grounding check, but
+				// they must not erase the same unresolved product-level finding.
+				// Carry only normalized issue identities; never reuse a verdict
+				// or repaired brief from the old evidence.
+				groundingIssueHistory = append([]string(nil), state.GroundingIssueHistory...)
 				p.logger.Info("source evidence or merge target changed; rebuilding candidate", "source_id", item.SourceID)
 			}
 		}
@@ -260,7 +266,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Warn("extraction failed, continuing without", "source_id", item.SourceID, "error", extractErr)
 		}
 	}
-	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, RebuildDraftID: rebuildDraftID}
+	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, RebuildDraftID: rebuildDraftID}
 	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
 }
 

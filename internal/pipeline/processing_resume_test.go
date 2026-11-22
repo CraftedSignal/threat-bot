@@ -62,6 +62,53 @@ func TestGroundingRetryResumesCandidateAcrossPipelineRestart(t *testing.T) {
 	}
 }
 
+func TestRepeatedGroundingFindingAcrossEvidenceRevisionQuarantines(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	assemblies, repairs, checks := 0, 0, 0
+	issue := "affected_products: missing source-supported fact for TeamCity: Missing the affected version bound."
+	client := shutdownStageLLM{
+		generate: func(_ context.Context, _, system string) (string, error) {
+			if strings.HasPrefix(system, groundingRepairSystemPrompt) {
+				repairs++
+			} else {
+				assemblies++
+			}
+			return validWindowsPathBriefYAML, nil
+		},
+		generateJSON: func(_ context.Context, _, _ string, out any) error {
+			checks++
+			r := out.(*GroundingResult)
+			r.Grounded = false
+			r.Issues = []string{issue}
+			return nil
+		},
+	}
+	item := scraper.RawItem{
+		SourceID:  "resume:changed-evidence-grounding",
+		Source:    "cisa-kev",
+		Title:     "TeamCity security advisory",
+		Content:   strings.Repeat("Confirmed vendor advisory about TeamCity. ", 30),
+		Enriched:  true,
+		SigmaRule: &scraper.SigmaRule{Title: "Rule"},
+	}
+	cfg := Config{DB: db, LLMClient: client, QualityThreshold: 3, MaxGroundingAttempts: 5, Logger: quietLogger(), RetryBackoff: -time.Second}
+	if err := New(cfg).processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	changed := item
+	changed.Content += "\nA newer source revision repeats the same affected-version scope."
+	if err := New(cfg).processItem(context.Background(), changed); err != nil {
+		t.Fatal(err)
+	}
+	if reason, ok, err := db.PipelineQuarantineReason(item.SourceID); err != nil || !ok || !strings.Contains(reason, "after 1 attempts") {
+		t.Fatalf("same product-level grounding finding restarted its retry budget across a source revision: quarantined=%v reason=%q err=%v", ok, reason, err)
+	}
+	if assemblies != 2 || repairs != 2 || checks != 4 {
+		t.Fatalf("unexpected calls across changed evidence: assemblies=%d repairs=%d checks=%d", assemblies, repairs, checks)
+	}
+}
+
 func TestProviderErrorsConsumeDurableGroundingBudget(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()

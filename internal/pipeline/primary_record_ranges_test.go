@@ -262,6 +262,88 @@ func TestPrimaryFactsReportWhatReachedTheChecker(t *testing.T) {
 	}
 }
 
+func TestVerifiedPrimaryEvidenceExplainsUnrenderableLinuxScope(t *testing.T) {
+	v := NewCVEVerifier(nil, nil)
+	v.cache["CVE-2026-99462"] = &CVEMeta{
+		Exists: true, Verification: CVEVerification{Status: "verified", Source: "cve_program"},
+		CachedAt: time.Now(), CNAChecked: true,
+		CNAFacts: []cnaSourceFact{
+			affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"unaffected","versions":[{"version":"7460b470a131f985a70302a322617121efdd7caa","lessThan":"0fab93d241cfb6f3aae29530a9a214157bb64087","status":"affected","versionType":"git"}]}`),
+			affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"affected","versions":[{"version":"6.15","status":"affected"},{"version":"7.4-rc1","lessThanOrEqual":"*","status":"unaffected","versionType":"original_commit_for_fix"}]}`),
+		},
+	}
+	p := &Pipeline{cveVerifier: v}
+	evidence := p.verifiedPrimaryEvidence([]string{"CVE-2026-99462"})
+	for _, want := range []string{"Applicability range limitation", "CVE-2026-99462", "Linux", "commit", "original_commit_for_fix", "cannot be mapped safely to release-version ranges"} {
+		if !strings.Contains(evidence, want) {
+			t.Errorf("verified evidence missing %q:\n%s", want, evidence)
+		}
+	}
+	if strings.Contains(evidence, "7.4-rc1 is fixed") {
+		t.Fatalf("evidence promoted an original_commit_for_fix marker to a released fix:\n%s", evidence)
+	}
+}
+
+func TestVerifiedPrimaryEvidenceDoesNotFlagLiteralRangesAsUnresolved(t *testing.T) {
+	v := NewCVEVerifier(nil, nil)
+	v.cache["CVE-2026-0001"] = &CVEMeta{
+		Exists: true, Verification: CVEVerification{Status: "verified", Source: "cve_program"},
+		CachedAt: time.Now(), CNAChecked: true,
+		CNAFacts: []cnaSourceFact{affectedFact("CVE-2026-0001", "PrestaShop", recordPrestaShop)},
+	}
+	p := &Pipeline{cveVerifier: v}
+	evidence := p.verifiedPrimaryEvidence([]string{"CVE-2026-0001"})
+	if strings.Contains(evidence, "Applicability range limitation") {
+		t.Fatalf("literal, renderable ranges were marked unresolved:\n%s", evidence)
+	}
+}
+
+func TestUnrenderablePrimaryScopeIsPublishedAsAnExplicitGap(t *testing.T) {
+	facts := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"affected","versions":[{"version":"7.4-rc1","lessThanOrEqual":"*","status":"unaffected","versionType":"original_commit_for_fix"}]}`),
+	}}
+	raw := injectAffectedRanges("affected_products:\n  - Linux Kernel\n", scraper.RawItem{Source: "nvd"}, facts)
+	if strings.Contains(raw, "Linux Kernel (>=") || strings.Contains(raw, "7.4-rc1 is fixed") {
+		t.Fatalf("unrenderable CNA marker became a release range or fix:\n%s", raw)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	assessment, ok := doc["source_assessment"].(map[string]any)
+	if !ok {
+		t.Fatalf("source_assessment gap was not added: %#v", doc["source_assessment"])
+	}
+	gaps := yamlStringList(assessment["gaps"])
+	if len(gaps) != 1 || !strings.Contains(gaps[0], "CVE-2026-99462 / Linux") || !strings.Contains(gaps[0], "cannot be mapped safely") {
+		t.Fatalf("source_assessment.gaps = %#v", gaps)
+	}
+	if twice := injectAffectedRanges(raw, scraper.RawItem{Source: "nvd"}, facts); twice != raw {
+		t.Fatalf("adding primary scope gap is not idempotent:\n%s\n---\n%s", raw, twice)
+	}
+}
+
+func TestUnrenderableUnrelatedCNAProductDoesNotAddAScopeGap(t *testing.T) {
+	facts := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"affected","versions":[{"version":"7.4-rc1","lessThanOrEqual":"*","status":"unaffected","versionType":"original_commit_for_fix"}]}`),
+	}}
+	raw := injectAffectedRanges("affected_products:\n  - Widget\n", scraper.RawItem{Source: "nvd"}, facts)
+	if strings.Contains(raw, "Applicability range limitation") || strings.Contains(raw, "cannot be mapped safely") {
+		t.Fatalf("unrelated product scope leaked into the brief:\n%s", raw)
+	}
+}
+
+func TestUnrenderablePrimaryScopeGapCombinesAllRangeLimitations(t *testing.T) {
+	primary := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"unaffected","versions":[{"version":"7460b470a131f985a70302a322617121efdd7caa","lessThan":"0fab93d241cfb6f3aae29530a9a214157bb64087","status":"affected","versionType":"git"}]}`),
+		affectedFact("CVE-2026-99462", "Linux", `{"vendor":"Linux","product":"Linux","defaultStatus":"affected","versions":[{"version":"7.4-rc1","lessThanOrEqual":"*","status":"unaffected","versionType":"original_commit_for_fix"}]}`),
+	}}
+	gaps := unresolvedPrimaryScopeGaps(primary, []string{"Linux Kernel"})
+	if len(gaps) != 1 || !strings.Contains(gaps[0], "Git commit bounds") || !strings.Contains(gaps[0], "original_commit_for_fix markers") {
+		t.Fatalf("scope gap lost one of the primary record limitations: %v", gaps)
+	}
+}
+
 func TestCVERecordReportsTruncatedAffectedEntries(t *testing.T) {
 	var record cnaSourceRecord
 	if err := json.Unmarshal([]byte(`{"affected":[{"product":"A","versions":[{"version":"0","lessThan":"1.0","status":"affected"}]},{"product":"B","versions":[{"version":"0","lessThan":"`+strings.Repeat("1", maxCNAEvidenceBytes)+`","status":"affected"}]}]}`), &record); err != nil {

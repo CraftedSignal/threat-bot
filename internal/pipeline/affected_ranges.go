@@ -68,7 +68,9 @@ func injectAffectedRanges(briefYAML string, item scraper.RawItem, primary primar
 	for key := range conflicting {
 		delete(scopes, key)
 	}
-	if !applyProductRanges(doc, scopes) {
+	changed := applyProductRanges(doc, scopes)
+	changed = addPrimaryScopeGaps(doc, primary) || changed
+	if !changed {
 		return briefYAML
 	}
 	out, err := yaml.Marshal(doc)
@@ -173,6 +175,131 @@ func primaryRecordRanges(products []string, primary primaryRecordFacts) map[stri
 		delete(out, key)
 	}
 	return out
+}
+
+// unresolvedPrimaryScopeGuidance makes the renderer's conservative decision
+// explicit to both assembly and grounding. Without it, a model can interpret
+// Git commit bounds or an original_commit_for_fix marker as product releases,
+// then spend a repair/recheck cycle on ranges the public feed cannot safely
+// express. This is explanatory evidence only: it never supplies a range or a
+// fixed release, and unsupported version claims remain subject to grounding.
+func unresolvedPrimaryScopeGuidance(primary primaryRecordFacts) string {
+	gaps := unresolvedPrimaryScopeGaps(primary, nil)
+	if len(gaps) == 0 {
+		return ""
+	}
+	for i := range gaps {
+		gaps[i] = "- " + gaps[i]
+	}
+	return "Applicability range limitation (machine-derived; not a claim of fixed versions):\n" + strings.Join(gaps, "\n") + "\n"
+}
+
+func unresolvedPrimaryScopeGaps(primary primaryRecordFacts, products []string) []string {
+	if primary.Truncated {
+		return nil
+	}
+	type scopeGap struct {
+		cve, product string
+		reasons      map[string]bool
+	}
+	byScope := map[string]*scopeGap{}
+	for _, fact := range primary.Included {
+		if fact.Kind != "affected" {
+			continue
+		}
+		var entry cnaAffectedEntry
+		if err := json.Unmarshal([]byte(fact.Text), &entry); err != nil {
+			continue
+		}
+		if _, ok := entry.ranges(); ok {
+			continue
+		}
+		product := strings.TrimSpace(fact.Product)
+		if product == "" {
+			product = strings.TrimSpace(entry.Product)
+		}
+		if len(products) > 0 {
+			matches := 0
+			for _, target := range products {
+				if productMatchesRangeName(target, product) {
+					matches++
+				}
+			}
+			if matches != 1 {
+				continue
+			}
+		}
+		key := strings.ToUpper(fact.CVEID) + "\x00" + scopeProductKey(product)
+		if fact.CVEID == "" || product == "" {
+			continue
+		}
+		gap := byScope[key]
+		if gap == nil {
+			gap = &scopeGap{cve: fact.CVEID, product: product, reasons: map[string]bool{}}
+			byScope[key] = gap
+		}
+		for _, version := range entry.Versions {
+			switch strings.ToLower(strings.TrimSpace(version.VersionType)) {
+			case "git":
+				gap.reasons["Git commit bounds"] = true
+			case "original_commit_for_fix":
+				gap.reasons["original_commit_for_fix markers"] = true
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(entry.DefaultStatus), "affected") {
+			gap.reasons["defaultStatus=affected with version exceptions"] = true
+		}
+	}
+	keys := make([]string, 0, len(byScope))
+	for key := range byScope {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	gaps := make([]string, 0, len(keys))
+	for _, key := range keys {
+		gap := byScope[key]
+		reasons := make([]string, 0, len(gap.reasons))
+		for reason := range gap.reasons {
+			reasons = append(reasons, reason)
+		}
+		slices.Sort(reasons)
+		if len(reasons) == 0 {
+			reasons = []string{"status or bounds that require interpretation"}
+		}
+		gaps = append(gaps, gap.cve+" / "+gap.product+": "+strings.Join(reasons, ", ")+". The supplied primary record cannot be mapped safely to release-version ranges; verify the installed branch against current vendor guidance. Do not infer a fixed release from this record.")
+	}
+	return gaps
+}
+
+// addPrimaryScopeGaps makes an unrenderable primary scope visible in the
+// published brief's source assessment. It avoids demanding a fabricated
+// semver range while preserving an explicit defender-facing limitation.
+func addPrimaryScopeGaps(doc map[string]any, primary primaryRecordFacts) bool {
+	products := nonEmptyTrimmed(yamlStringList(doc["affected_products"]))
+	if len(products) == 0 {
+		return false
+	}
+	gaps := unresolvedPrimaryScopeGaps(primary, products)
+	if len(gaps) == 0 {
+		return false
+	}
+	assessment, ok := doc["source_assessment"].(map[string]any)
+	if !ok {
+		assessment = map[string]any{}
+		doc["source_assessment"] = assessment
+	}
+	prior := nonEmptyTrimmed(yamlStringList(assessment["gaps"]))
+	changed := false
+	for _, gap := range gaps {
+		if !slices.Contains(prior, gap) {
+			prior = append(prior, gap)
+			changed = true
+		}
+	}
+	if changed {
+		assessment["gaps"] = prior
+	}
+	return changed
 }
 
 // ranges renders the entry's affected versions literally. It refuses entries

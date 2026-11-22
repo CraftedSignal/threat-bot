@@ -161,6 +161,73 @@ func TestFailedChangedEvidenceRebuildPreservesGroundingHistory(t *testing.T) {
 	}
 }
 
+func TestChangedEnrichedEvidenceKeepsReplacementCheckpointWithStableInputKey(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	updatedPage := false
+	issue := "affected_products: missing source-supported fact for TeamCity: Missing the affected version bound."
+	client := shutdownStageLLM{
+		generate: func(_ context.Context, _, _ string) (string, error) { return validWindowsPathBriefYAML, nil },
+		generateJSON: func(_ context.Context, _, _ string, out any) error {
+			if result, ok := out.(*QualityScore); ok {
+				*result = QualityScore{Credibility: 5, Actionability: 5, Novelty: 5}
+				return nil
+			}
+			result := out.(*GroundingResult)
+			result.Grounded = false
+			if updatedPage {
+				result.Issues = []string{"affected_vendors: missing source-supported fact for JetBrains: Missing the vendor alias."}
+			} else {
+				result.Issues = []string{issue}
+			}
+			return nil
+		},
+	}
+	p := New(Config{DB: db, LLMClient: client, QualityThreshold: 1, MaxGroundingAttempts: 5, RetryBackoff: -time.Second, Logger: quietLogger()})
+	p.enricher.client = &http.Client{Transport: enrichRoundTrip(func(*http.Request) (*http.Response, error) {
+		page := "Original affected version scope."
+		if updatedPage {
+			page = "Corrected affected version scope."
+		}
+		body := "<html><body>" + strings.Repeat(page+" Confirmed TeamCity security advisory details. ", 25) + "</body></html>"
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/html"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	item := scraper.RawItem{SourceID: "audit:stable-input", Source: "cisa-kev", Title: "TeamCity notice", URL: "https://example.com/teamcity", Content: strings.Repeat("Brief vendor notice. ", 10), NeedsFullArticle: true, SigmaRule: &scraper.SigmaRule{Title: "Rule"}}
+	inputKey := p.processingInputKey(item)
+	if err := p.processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || first == nil || first.InputKey != inputKey {
+		t.Fatalf("initial checkpoint missing: checkpoint=%+v err=%v", first, err)
+	}
+	var oldState processingCandidate
+	if err := yaml.Unmarshal([]byte(first.Payload), &oldState); err != nil {
+		t.Fatal(err)
+	}
+	if len(oldState.GroundingIssueHistory) != 1 {
+		t.Fatalf("initial issue history = %v", oldState.GroundingIssueHistory)
+	}
+	updatedPage = true
+	if err := p.processItem(context.Background(), item); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || second == nil || second.InputKey != inputKey {
+		t.Fatalf("replacement checkpoint was deleted despite stable input locator: checkpoint=%+v err=%v", second, err)
+	}
+	var newState processingCandidate
+	if err := yaml.Unmarshal([]byte(second.Payload), &newState); err != nil {
+		t.Fatal(err)
+	}
+	if newState.EvidenceKey == oldState.EvidenceKey {
+		t.Fatal("changed enriched page retained the old evidence key")
+	}
+	if len(newState.GroundingIssueHistory) < 2 {
+		t.Fatalf("replacement checkpoint lost or reset finding history: %v", newState.GroundingIssueHistory)
+	}
+}
+
 func TestProviderErrorsConsumeDurableGroundingBudget(t *testing.T) {
 	db := mustOpenTestDB(t)
 	defer db.Close()

@@ -143,6 +143,10 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	addedPrioritySignals := mergeStringList(base, "priority_signals", yamlStringList(incoming["priority_signals"]))
 	addedRules := mergeMapListByIdentityComplete(base, "rules", incoming["rules"], []string{"id", "title"})
 	addedTTPs := mergeMapListByIdentityComplete(base, "ttps", incoming["ttps"], []string{"technique_id", "subtechnique_id", "tactic_id", "technique_name"})
+	cleanCVEs, cleanedCVEs := dedupeExistingCVEEntries(base["cves"])
+	if cleanedCVEs {
+		base["cves"] = cleanCVEs
+	}
 	addedCVEs := mergeMapListByIdentityComplete(base, "cves", incoming["cves"], []string{"id"})
 	addedIOCs := mergeMapListByIdentityComplete(base, "iocs", incoming["iocs"], []string{"type", "value"})
 	severityChanged := mergeHigherSeverity(base, incoming)
@@ -155,7 +159,7 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	qaChanged := mergeMapIfMissing(base, incoming, "qa_status")
 
 	changed := narrativeChanged || addedVendors || addedProducts || addedOS || addedRefs || addedTags ||
-		addedCPEs || addedPOCRefs || addedPrioritySignals || addedRules || addedTTPs || addedCVEs || addedIOCs ||
+		addedCPEs || addedPOCRefs || addedPrioritySignals || addedRules || addedTTPs || addedCVEs || cleanedCVEs || addedIOCs ||
 		severityChanged || actorChanged || pocChanged || exploitationChanged || priorityChanged || actionPlanChanged ||
 		assessmentChanged || qaChanged
 	if !changed {
@@ -176,6 +180,9 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	level, summary := classifyUpdate(pre, post, addedVendors, addedProducts, addedOS, addedCVEs, addedIOCs, addedRefs)
 	if level == "L0" {
 		level = "L1"
+	}
+	if cleanedCVEs && !addedCVEs {
+		summary = "corrected duplicate CVE entries"
 	}
 	if level != "L3" && (addedRules || actionPlanChanged) {
 		summary = assembledUpdateSummary(incoming)

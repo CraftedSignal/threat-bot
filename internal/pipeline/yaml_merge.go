@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -50,35 +51,13 @@ func asStringMap(v any) (map[string]any, bool) {
 // KEV/confirmed flags but cannot erase them.
 func mergeMapListByIdentityComplete(fm map[string]any, key string, incoming any, identityKeys []string) bool {
 	existing := yamlAnyList(fm[key])
-	mergedExisting := make([]any, 0, len(existing))
 	indices := make(map[string]int, len(existing))
-	changed := false
-	for _, item := range existing {
-		id := mapListIdentity(item, identityKeys)
-		if id == "" {
-			mergedExisting = append(mergedExisting, item)
-			continue
+	for i, item := range existing {
+		if id := mapListIdentity(item, identityKeys); id != "" {
+			indices[id] = i
 		}
-		if idx, found := indices[id]; found {
-			changed = true
-			baseMap, baseOK := asStringMap(mergedExisting[idx])
-			itemMap, itemOK := asStringMap(item)
-			if baseOK && itemOK {
-				if mergeMissingMapValues(baseMap, itemMap) {
-					changed = true
-				}
-				mergedExisting[idx] = baseMap
-			} else if !baseOK && itemOK {
-				// Prefer a structured row to a bare identifier when legacy data
-				// contains both forms for the same CVE.
-				mergedExisting[idx] = item
-			}
-			continue
-		}
-		indices[id] = len(mergedExisting)
-		mergedExisting = append(mergedExisting, item)
 	}
-	existing = mergedExisting
+	changed := false
 	for _, item := range yamlAnyList(incoming) {
 		id := mapListIdentity(item, identityKeys)
 		if id == "" {
@@ -101,6 +80,115 @@ func mergeMapListByIdentityComplete(fm map[string]any, key string, incoming any,
 		fm[key] = existing
 	}
 	return changed
+}
+
+// dedupeExistingCVEEntries repairs duplicate CVE rows already stored in a
+// brief. Rows merge only when their nonempty metadata agrees; conflicting
+// values stay separate for editorial resolution rather than being discarded.
+func dedupeExistingCVEEntries(value any) ([]any, bool) {
+	existing := yamlAnyList(value)
+	merged := make([]any, 0, len(existing))
+	indices := make(map[string][]int, len(existing))
+	changed := false
+	for _, item := range existing {
+		id := mapListIdentity(item, []string{"id"})
+		if id == "" {
+			merged = append(merged, item)
+			continue
+		}
+		for _, idx := range indices[id] {
+			if combined, compatible := mergeCompatibleCVERecords(merged[idx], item); compatible {
+				merged[idx] = combined
+				changed = true
+				goto nextItem
+			}
+		}
+		indices[id] = append(indices[id], len(merged))
+		merged = append(merged, item)
+	nextItem:
+	}
+	return merged, changed
+}
+
+func mergeCompatibleCVERecords(existing, incoming any) (any, bool) {
+	base, baseOK := asStringMap(existing)
+	next, nextOK := asStringMap(incoming)
+	if !baseOK || !nextOK {
+		if !baseOK && !nextOK && mapListIdentity(existing, []string{"id"}) == mapListIdentity(incoming, []string{"id"}) {
+			return existing, true
+		}
+		if baseOK && !nextOK {
+			return existing, mapListIdentity(existing, []string{"id"}) == mapListIdentity(incoming, []string{"id"})
+		}
+		if !baseOK && nextOK {
+			return incoming, mapListIdentity(existing, []string{"id"}) == mapListIdentity(incoming, []string{"id"})
+		}
+		return nil, false
+	}
+
+	for key, value := range next {
+		current, exists := base[key]
+		if !exists || yamlValueEmpty(current) || yamlValueEmpty(value) || key == "id" {
+			continue
+		}
+		switch key {
+		case "kev":
+			_, currentOK := current.(bool)
+			_, nextOK := value.(bool)
+			if (!currentOK || !nextOK) && !reflect.DeepEqual(current, value) {
+				return nil, false
+			}
+		case "kev_status":
+			currentStatus := strings.ToLower(strings.TrimSpace(fmt.Sprint(current)))
+			nextStatus := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+			if currentStatus != nextStatus && (kevStatusRank(currentStatus) < 0 || kevStatusRank(nextStatus) < 0) {
+				return nil, false
+			}
+		default:
+			if !reflect.DeepEqual(current, value) {
+				return nil, false
+			}
+		}
+	}
+	for key, value := range next {
+		current, exists := base[key]
+		if !exists || yamlValueEmpty(current) {
+			base[key] = value
+			continue
+		}
+		if key == "kev" {
+			currentFlag, currentOK := current.(bool)
+			nextFlag, nextOK := value.(bool)
+			if !currentOK || !nextOK {
+				if !reflect.DeepEqual(current, value) {
+					return nil, false
+				}
+				continue
+			}
+			base[key] = currentFlag || nextFlag
+			continue
+		}
+		if key == "kev_status" {
+			currentStatus, nextStatus := strings.ToLower(strings.TrimSpace(fmt.Sprint(current))), strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+			if kevStatusRank(nextStatus) > kevStatusRank(currentStatus) {
+				base[key] = nextStatus
+			}
+		}
+	}
+	return base, true
+}
+
+func kevStatusRank(status string) int {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "true":
+		return 2
+	case "false":
+		return 1
+	case "unknown", "":
+		return 0
+	default:
+		return -1
+	}
 }
 
 func mergeMissingMapValues(base, incoming map[string]any) bool {

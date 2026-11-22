@@ -344,6 +344,8 @@ jobs:
           PY
           (cd dist && sha256sum image-digest.txt release-record.json >> checksums.txt)
       - name: Attest release files
+        id: release_files_attest_first
+        continue-on-error: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -354,6 +356,28 @@ jobs:
             dist/checksums.txt
             dist/image-digest.txt
             dist/release-record.json
+      - name: Wait before retrying release-file attestation
+        if: steps.release_files_attest_first.outcome == 'failure'
+        run: sleep 15
+      - name: Retry release-file attestation once
+        id: release_files_attest_retry
+        if: steps.release_files_attest_first.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.spdx.json
+            dist/build-info.txt
+            dist/container-scan.json
+            dist/checksums.txt
+            dist/image-digest.txt
+            dist/release-record.json
+      - name: Require release-file attestation
+        if: steps.release_files_attest_first.outcome != 'success' && steps.release_files_attest_retry.outcome != 'success'
+        run: |
+          echo "Release-file attestation failed twice; release creation is blocked." >&2
+          exit 1
       - name: Attest container provenance (attempt 1)
         id: container_attest_first
         continue-on-error: true

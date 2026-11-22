@@ -34,6 +34,7 @@ jobs:
         run: |
           go mod download
           go mod verify
+          python3 .github/scripts/test-release-attestation-retry.py
           make format-check test-race vet docs-check
       - name: Required deterministic brief quality corpus
         run: go test -count=1 ./internal/eval -run '^TestEvalGate$'

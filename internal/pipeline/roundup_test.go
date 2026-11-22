@@ -182,7 +182,7 @@ func TestRoundupConsolidation_SingleVendorOnly(t *testing.T) {
 	// patch-cycle vendor IS eligible.
 	single := scraper.RawItem{
 		SourceID: "google:angular", Source: "google-project-zero",
-		Title:   "Angular XSS",
+		Title:   "CVE-2026-7001 Angular XSS",
 		Content: "Angular advisory.",
 	}
 	singleEx := &ExtractionResult{

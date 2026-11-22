@@ -5,7 +5,119 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/craftedsignal/threat-bot/internal/scraper"
 )
+
+func TestRoundupFoldScopesExtractedCVEsToSourceEvidence(t *testing.T) {
+	const target, unrelated, prefix = "CVE-2026-111306", "CVE-2026-118707", "CVE-2026-11130"
+	const first, second, historical = "CVE-2026-111301", "CVE-2026-111302", "CVE-2024-4577"
+	tests := []struct {
+		name       string
+		item       scraper.RawItem
+		extraction *ExtractionResult
+		want       []string
+		unwant     []string
+	}{
+		{
+			name: "NVD record keeps only its own CVE",
+			item: scraper.RawItem{
+				SourceID: "nvd:" + target,
+				Source:   "nvd",
+				Title:    target + " — Microsoft Office Word heap-based buffer overflow",
+				Content:  "A heap-based buffer overflow in Microsoft Office Word allows code execution. The advisory also references " + unrelated + ".",
+				URL:      "https://nvd.nist.gov/vuln/detail/" + target,
+			},
+			extraction: &ExtractionResult{CVEs: []string{target, unrelated, prefix}, AffectedVendors: []string{"Microsoft"}},
+			want:       []string{target},
+			unwant:     []string{unrelated, prefix},
+		},
+		{
+			name: "vendor roundup keeps every CVE named by its source",
+			item: scraper.RawItem{
+				SourceID:            "msrc:november-2026",
+				Source:              "msrc",
+				Title:               "Microsoft security updates — November 2026",
+				Content:             "Microsoft's November security updates address " + first + " and " + second + ". For comparison, the older " + historical + " was a different issue.",
+				URL:                 "https://msrc.microsoft.com/update-guide/releaseNote/november-2026",
+				BodyCVEsAreSubjects: true,
+			},
+			extraction: &ExtractionResult{CVEs: []string{first, second, historical}, AffectedVendors: []string{"Microsoft"}},
+			want:       []string{first, second},
+			unwant:     []string{historical},
+		},
+		{
+			name: "previously exploitable wording is not a historical CVE",
+			item: scraper.RawItem{
+				SourceID:            "msrc:previously-exploitable",
+				Source:              "msrc",
+				Title:               "Microsoft security update",
+				Content:             "The update fixes CVE-2026-111303, which previously allowed privilege escalation.",
+				URL:                 "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-111303",
+				BodyCVEsAreSubjects: true,
+			},
+			extraction: &ExtractionResult{CVEs: []string{"CVE-2026-111303"}, AffectedVendors: []string{"Microsoft"}},
+			want:       []string{"CVE-2026-111303"},
+		},
+		{
+			name: "fixing a previously disclosed CVE remains a current subject",
+			item: scraper.RawItem{
+				SourceID:            "msrc:previously-disclosed",
+				Source:              "msrc",
+				Title:               "Microsoft security update",
+				Content:             "This update fixes the previously disclosed CVE-2026-111305.",
+				URL:                 "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-111305",
+				BodyCVEsAreSubjects: true,
+			},
+			extraction: &ExtractionResult{CVEs: []string{"CVE-2026-111305"}, AffectedVendors: []string{"Microsoft"}},
+			want:       []string{"CVE-2026-111305"},
+		},
+		{
+			name: "unicode before a body CVE does not panic or lose it",
+			item: scraper.RawItem{
+				SourceID:            "msrc:unicode",
+				Source:              "msrc",
+				Title:               "Microsoft security update",
+				Content:             "İ fixes CVE-2026-111304.",
+				URL:                 "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2026-111304",
+				BodyCVEsAreSubjects: true,
+			},
+			extraction: &ExtractionResult{CVEs: []string{"CVE-2026-111304"}, AffectedVendors: []string{"Microsoft"}},
+			want:       []string{"CVE-2026-111304"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			p := newDedupTestPipeline(t, db)
+			p.roundupConsolidation = true
+			if !p.routeToRoundup(context.Background(), tt.item, tt.extraction) {
+				t.Fatal("source was not routed to the vendor roundup")
+			}
+			entries, err := db.FindByVendorCycle(vendorCycleKey("Microsoft", time.Now().UTC()))
+			if err != nil || len(entries) == 0 {
+				t.Fatalf("find roundup: %v (%d entries)", err, len(entries))
+			}
+			draft, err := db.GetDraft(entries[0].DraftID)
+			if err != nil || draft == nil {
+				t.Fatalf("get roundup: %v", err)
+			}
+			ids := cveIDSet(structuredCVEsFromBrief(draft.BriefYAML))
+			for _, id := range tt.want {
+				if !ids[id] {
+					t.Errorf("source-supported CVE %s missing from roundup: %v", id, ids)
+				}
+			}
+			for _, id := range tt.unwant {
+				if ids[id] || strings.Contains(draft.BriefYAML, "## "+id+"\n") {
+					t.Errorf("unsubstantiated CVE %s leaked into roundup frontmatter or content", id)
+				}
+			}
+		})
+	}
+}
 
 // Fresh Microsoft CVEs have no CPEs and descriptions that never say
 // "Microsoft". Once one CVE matches the vendor scope by description, the scope

@@ -182,7 +182,7 @@ func (p *Pipeline) filterRoundupContentExtraction(ctx context.Context, vendor st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	base := sanitizeRoundupContentExtraction(vendor, extraction)
+	base := sanitizeRoundupContentExtraction(vendor, extraction, item)
 	if base == nil || (len(base.AffectedProducts) == 0 && len(base.AffectedOS) == 0) {
 		return base, nil
 	}

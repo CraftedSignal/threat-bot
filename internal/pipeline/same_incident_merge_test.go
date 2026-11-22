@@ -874,3 +874,62 @@ references: [https://example.test/trust]
 		t.Fatalf("expected one LLM attempt for a plausible candidate, got %d", llm.calls)
 	}
 }
+
+func TestNarrativeRebuildPreservesRoundupNarrative(t *testing.T) {
+	db := mustOpenTestDB(t)
+	defer db.Close()
+	p := New(Config{DB: db, Logger: slog.Default()})
+	base := `id: 2026-11-microsoft-security-updates
+slug: 2026-11-microsoft-security-updates
+title: Microsoft Security Updates - November 2026
+summary: Roundup of Microsoft security advisories published in November 2026.
+severity: high
+published_at: "2026-11-01T00:00:00Z"
+tags: [roundup]
+affected_vendors: [Microsoft]
+cves: [CVE-2026-10001, CVE-2026-10002]
+content: |
+  ## Overview
+  Aggregated Microsoft security advisories for November 2026.
+
+  ## CVE-2026-10001
+  First product-specific detail.
+
+  ## CVE-2026-10002
+  Second product-specific detail.
+`
+	if err := db.CreateDraft(&storage.Draft{ID: "roundup", Status: storage.StatusApproved, Source: "msrc", BriefYAML: base, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	incoming := `id: cve-2026-10001
+title: Microsoft Word heap overflow (CVE-2026-10001)
+summary: A heap overflow in Microsoft Word permits code execution.
+severity: high
+published_at: "2026-11-01T00:00:00Z"
+affected_vendors: [Microsoft]
+affected_products: [Microsoft Word]
+cves: [CVE-2026-10001]
+references: [https://msrc.example/advisory]
+content: |
+  ## Overview
+  A heap overflow in Microsoft Word permits code execution.
+
+  ## Recommendation
+  Install the vendor-provided Microsoft Office update that corrects CVE-2026-10001.
+action_plan:
+  immediate_actions:
+    - action: Install the vendor-provided Microsoft Office update.
+      evidence: The vendor advisory states the update corrects CVE-2026-10001.
+`
+	err := p.mergeAssembledBriefIntoDraftWithNarrative("roundup", incoming, scraper.RawItem{SourceID: "nvd:CVE-2026-10001", Source: "nvd"}, true)
+	if err == nil || !strings.Contains(err.Error(), "requires editorial review") {
+		t.Fatalf("non-product narrative rebuild should be held for review, got %v", err)
+	}
+	draft, err := db.GetDraft("roundup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.BriefYAML != base || draft.UpdateCount != 0 {
+		t.Fatalf("held narrative rebuild mutated the roundup: updates=%d\n%s", draft.UpdateCount, draft.BriefYAML)
+	}
+}

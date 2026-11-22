@@ -117,6 +117,9 @@ func (p *Pipeline) mergeAssembledBriefIntoDraftWithNarrative(draftID, incomingYA
 	if err := yaml.Unmarshal([]byte(incomingYAML), &incoming); err != nil {
 		return fmt.Errorf("assembled merge: parse incoming: %w", err)
 	}
+	if preferIncomingNarrative && (briefType(draft.BriefYAML) != "product" || briefType(incomingYAML) != "product") {
+		return fmt.Errorf("rebuilt narrative requires editorial review: narrative replacement is limited to product briefs (target=%s, incoming=%s)", briefType(draft.BriefYAML), briefType(incomingYAML))
+	}
 	pre := snapshotBriefSignals(base)
 	narrativeChanged := false
 	if preferIncomingNarrative {

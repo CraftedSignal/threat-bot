@@ -135,6 +135,11 @@ func publicationAggregateRoundupTitle(title string) bool {
 }
 
 func publicationDuplicateCVEIssues(brief map[string]any) []string {
+	// Older drafts may contain compatible partial rows (for example one row
+	// with CVSS and another with KEV). Treat those as one enriched record, but
+	// keep contradictory values separate so the publication gate still sends
+	// them to editorial review.
+	brief["cves"], _ = dedupeExistingCVEEntries(brief["cves"])
 	seen := make(map[string]bool)
 	reported := make(map[string]bool)
 	var issues []string

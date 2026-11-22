@@ -260,6 +260,51 @@ func TestRenderPublicBriefMarkdownEnforcesFeedContract(t *testing.T) {
 	}
 }
 
+func TestRenderPublicBriefMarkdownDeduplicatesCompatibleCVERows(t *testing.T) {
+	brief := BundleBrief{
+		ID: "roller-cve", Slug: "roller-cve", Title: "Apache Roller: Remote Code Execution (CVE-2026-129448)",
+		Summary:  "CVE-2026-129448 allows remote code execution in Apache Roller.",
+		Content:  "CVE-2026-129448 affects Apache Roller.\n\n## Recommendation\nUpgrade Apache Roller to a fixed release.",
+		Severity: "critical", PublishedAt: "2026-11-17T17:25:43Z",
+		AffectedVendors: []string{"Apache Software Foundation"}, AffectedProducts: []string{"Apache Roller"},
+		References: []string{"https://nvd.nist.gov/vuln/detail/CVE-2026-129448"},
+		CVEs: []BundleCVE{
+			{ID: "CVE-2026-129448", CVSS: 9.8, KEV: true, KEVStatus: "true"},
+			{ID: " cve-2026-129448 ", EPSS: 0.7, EPSSPercentile: 0.9},
+		},
+		ExploitationEvidence: &BundleExploitationEvidence{Status: "unknown"},
+	}
+	path, markdown, rendered, publish, err := RenderPublicBriefMarkdown(brief, nil)
+	if err != nil || !publish {
+		t.Fatalf("RenderPublicBriefMarkdown(%s) publish=%t err=%v", path, publish, err)
+	}
+	if len(rendered.CVEs) != 1 {
+		t.Fatalf("rendered CVEs = %+v, want one canonical row", rendered.CVEs)
+	}
+	cve := rendered.CVEs[0]
+	if cve.ID != "CVE-2026-129448" || cve.CVSS != 9.8 || cve.EPSS != 0.7 || cve.EPSSPercentile != 0.9 || !cve.KEV || cve.KEVStatus != "true" {
+		t.Fatalf("canonical CVE row lost non-conflicting or KEV metadata: %+v", cve)
+	}
+	if strings.Count(string(markdown), "id: CVE-2026-129448") != 1 {
+		t.Fatalf("public frontmatter did not emit exactly one CVE row:\n%s", markdown)
+	}
+}
+
+func TestRenderPublicBriefMarkdownRejectsConflictingDuplicateCVEFields(t *testing.T) {
+	brief := BundleBrief{
+		ID: "conflicting-cve", Slug: "conflicting-cve", Title: "Apache Roller issue (CVE-2026-129448)",
+		Summary:  "CVE-2026-129448 affects Apache Roller.",
+		Content:  "CVE-2026-129448 affects Apache Roller.\n\n## Recommendation\nUpgrade Apache Roller to a fixed release.",
+		Severity: "high", PublishedAt: "2026-11-17T17:25:43Z",
+		AffectedVendors: []string{"Apache Software Foundation"}, AffectedProducts: []string{"Apache Roller"},
+		CVEs:                 []BundleCVE{{ID: "CVE-2026-129448", CVSS: 9.8}, {ID: "CVE-2026-129448", CVSS: 7.5}},
+		ExploitationEvidence: &BundleExploitationEvidence{Status: "unknown"},
+	}
+	if _, _, _, _, err := RenderPublicBriefMarkdown(brief, nil); err == nil {
+		t.Fatal("conflicting CVSS values for one CVE were silently published")
+	}
+}
+
 func TestBackfillBriefSelectedBySlugOrID(t *testing.T) {
 	wanted := newBackfillSelection([]string{"  OCTOBER-BRIEF  ", "brief-123"})
 

@@ -52,6 +52,50 @@ func TestReleaseEvaluatesMainPushesAndVersionTagsAfterValidation(t *testing.T) {
 	}
 }
 
+func TestContainerAttestationRetriesOnceButRemainsAReleaseGate(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+	publish := workflow["jobs"].(map[string]any)["publish"].(map[string]any)
+	steps := publish["steps"].([]any)
+	var attempts []map[string]any
+	requireIndex := -1
+	releaseIndex := -1
+	for i, raw := range steps {
+		step := raw.(map[string]any)
+		name, _ := step["name"].(string)
+		uses, _ := step["uses"].(string)
+		if strings.Contains(name, "container provenance") && strings.Contains(uses, "actions/attest-build-provenance") {
+			attempts = append(attempts, step)
+		}
+		if name == "Require container provenance attestation" {
+			requireIndex = i
+		}
+		if name == "Create release" {
+			releaseIndex = i
+		}
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("container provenance must have one bounded retry, got %d attempts", len(attempts))
+	}
+	firstID, _ := attempts[0]["id"].(string)
+	if firstID == "" || attempts[0]["continue-on-error"] != true {
+		t.Fatal("first attestation attempt must record failure and continue to the bounded retry")
+	}
+	retryCondition, _ := attempts[1]["if"].(string)
+	if !strings.Contains(retryCondition, "steps."+firstID+".outcome == 'failure'") || attempts[1]["continue-on-error"] != true {
+		t.Fatal("second attempt must run only after the first fails and retain its failure for the final gate")
+	}
+	if requireIndex <= 0 || releaseIndex <= requireIndex {
+		t.Fatal("release creation must follow the final container-attestation gate")
+	}
+	gate := steps[requireIndex].(map[string]any)
+	condition, _ := gate["if"].(string)
+	run, _ := gate["run"].(string)
+	secondID, _ := attempts[1]["id"].(string)
+	if secondID == "" || !strings.Contains(condition, "steps."+firstID+".outcome == 'failure'") || !strings.Contains(condition, "steps."+secondID+".outcome == 'failure'") || !strings.Contains(run, "exit 1") {
+		t.Fatal("release must fail when both provenance attempts fail")
+	}
+}
+
 func TestReleaseOwnsPostMergeValidation(t *testing.T) {
 	workflow := readWorkflow(t, "ci.yml")
 	triggers := workflow["on"].(map[string]any)

@@ -25,9 +25,18 @@ func (p *Publisher) FlushSegmented() error {
 	count := len(p.pending)
 	flushed := p.outboxSnapshot()
 	message := fmt.Sprintf("chore: publish threat feed release (%d briefs)", count)
+	publicationRetries := 0
 	for {
 		err := p.withAtomicPublication(message, p.flushSegmentedRelease)
 		if errors.Is(err, errRestartFlush) {
+			continue
+		}
+		if errors.Is(err, ErrPublicationConflict) && publicationRetries < publicationConflictFlushRetries {
+			publicationRetries++
+			delay := time.Duration(publicationRetries) * time.Second
+			p.logger.Warn("recomputing segmented flush after concurrent publication changed feed state",
+				"attempt", publicationRetries+1, "max_attempts", publicationConflictFlushRetries+1, "retry_in", delay)
+			time.Sleep(delay)
 			continue
 		}
 		if err != nil {
@@ -53,6 +62,10 @@ func (p *Publisher) FlushSegmented() error {
 	p.finishRestoredRetirements(restored)
 	return completionErr
 }
+
+// A changed staged/read path cannot be rebased inside the atomic transaction;
+// the entire release must be re-read and recomputed from the new feed head.
+const publicationConflictFlushRetries = 2
 
 // finishRestoredRetirements runs the retirement-applied callback for every
 // restored retirement the flush just published (those a rejected canonical

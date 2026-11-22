@@ -139,7 +139,9 @@ action_plan:
 }
 
 func TestValidatePublicationConsistencyRejectsSingleCVEIdentityOnHugeRoundup(t *testing.T) {
-	cves := make([]string, 100)
+	// Mirrors the public Microsoft roundup's 1,090-CVE inventory and
+	// single-CVE Office Word title.
+	cves := make([]string, 1090)
 	for i := range cves {
 		cves[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
 	}
@@ -156,7 +158,7 @@ func TestValidatePublicationConsistencyRejectsSingleCVEIdentityOnHugeRoundup(t *
 	}
 	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
 	if !strings.Contains(issues, "roundup") {
-		t.Fatalf("single-CVE title accepted for a 100-CVE roundup: %s", issues)
+		t.Fatalf("single-CVE title accepted for a 1,090-CVE roundup: %s", issues)
 	}
 }
 
@@ -173,10 +175,23 @@ func TestValidatePublicationConsistencyAllowsSmallCVEChainAndGenericLargeRoundup
 			"summary": "Microsoft's November security updates address vulnerabilities across supported products.",
 			"content": "## Overview\nThe monthly security release addresses vulnerabilities across Microsoft products.\n\n## Recommendation\nPrioritize the vendor's actively exploited issues and apply the cumulative updates through the normal patch process.",
 			"tags":    []string{"roundup", "Microsoft"}, "cves": func() []string {
-				ids := make([]string, 100)
+				ids := make([]string, 1090)
 				for i := range ids {
 					ids[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
 				}
+				return ids
+			}(),
+		},
+		"aggregate title with one named CVE": {
+			"title":   "Microsoft November security updates address CVE-2026-111306",
+			"summary": "Microsoft's November security updates address vulnerabilities across supported products.",
+			"content": "## Overview\nThe monthly security release addresses vulnerabilities across Microsoft products.\n\n## Recommendation\nPrioritize the vendor's actively exploited issues and apply the cumulative updates through the normal patch process.",
+			"tags":    []string{"roundup", "Microsoft"}, "cves": func() []string {
+				ids := make([]string, 1090)
+				for i := range ids {
+					ids[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
+				}
+				ids[0] = "CVE-2026-111306"
 				return ids
 			}(),
 		},
@@ -191,5 +206,32 @@ func TestValidatePublicationConsistencyAllowsSmallCVEChainAndGenericLargeRoundup
 				t.Fatalf("valid roundup/chain was rejected: %s", issues)
 			}
 		})
+	}
+}
+
+func TestSafeExploitationWithdrawalCannotBypassRoundupIdentityCheck(t *testing.T) {
+	cves := make([]string, 1090)
+	for i := range cves {
+		cves[i] = fmt.Sprintf("CVE-2026-%05d", i+10000)
+	}
+	cves[0] = "CVE-2026-111306"
+	doc := map[string]any{
+		"title":   "Microsoft Office Word heap-based buffer overflow (CVE-2026-111306)",
+		"summary": "A heap-based buffer overflow in Microsoft Office Word.",
+		"content": "## Overview\nA heap-based buffer overflow in Microsoft Office Word, tracked as CVE-2026-111306.\n\n## Recommendation\nApply current Microsoft Office updates.",
+		"tags":    []string{"roundup", "Microsoft", "Office"}, "cves": cves,
+		"exploited": false, "exploitation_evidence": map[string]any{"status": "unknown"},
+		"updates": []any{map[string]any{
+			"level": "L1", "summary": "exploitation evidence corrected: an exploit-code listing is not exploitation",
+			"sources": []string{"threat-bot"}, "source_urls": []string{},
+		}},
+	}
+	raw, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues := strings.Join(ValidatePublicationConsistency(string(raw)), "; ")
+	if !strings.Contains(issues, "roundup") {
+		t.Fatalf("safe withdrawal bypassed roundup identity check: %s", issues)
 	}
 }

@@ -23,20 +23,19 @@ func ValidatePublicationConsistency(rawYAML string) []string {
 	if brief == nil {
 		return []string{"brief YAML is empty"}
 	}
+	title := publicationString(brief["title"])
+	issues := publicationRoundupIdentityIssues(brief, title)
 	// A catalog-backed exploitation withdrawal is a narrow safety correction to
 	// an already-published brief. It must not be held because that legacy brief
 	// lacks unrelated content-quality fields (such as a recommendation or hunt
 	// lead). Structural validation, source-reference checks, and rendering still
 	// run in the normal publication path.
 	if safeExploitationWithdrawalUpdate(brief) {
-		return nil
+		return issues
 	}
 
-	var issues []string
-	title := publicationString(brief["title"])
 	summary := publicationString(brief["summary"])
 	content := publicationString(brief["content"])
-	issues = append(issues, publicationRoundupIdentityIssues(brief, title)...)
 	if verification, ok := asStringMap(brief["cve_verification"]); ok {
 		for _, id := range publicationCVEs(brief["cves"], title+"\n"+summary+"\n"+content) {
 			entry, ok := asStringMap(verification[id])
@@ -118,10 +117,20 @@ func publicationRoundupIdentityIssues(brief map[string]any, title string) []stri
 	}
 	cves := publicationCVEs(brief["cves"], "")
 	titleCVEs := publicationCVEs(nil, title)
-	if len(cves) < 50 || len(titleCVEs) != 1 {
+	if len(cves) < 50 || len(titleCVEs) != 1 || publicationAggregateRoundupTitle(title) {
 		return nil
 	}
 	return []string{fmt.Sprintf("roundup lists %d CVEs but its title identifies only %s; use an aggregate title", len(cves), titleCVEs[0])}
+}
+
+func publicationAggregateRoundupTitle(title string) bool {
+	lower := strings.ToLower(title)
+	for _, marker := range []string{"roundup", "multiple vulnerabilities", "security updates", "monthly security", "monthly updates", "patch tuesday", "security bulletin", "security release"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func safeExploitationWithdrawalUpdate(brief map[string]any) bool {

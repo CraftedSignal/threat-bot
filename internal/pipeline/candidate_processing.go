@@ -22,6 +22,14 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		}
 	}
 	state.GroundingFailure = nil
+	if state.GroundingFindingPolicy != groundingFindingPolicyVersion {
+		// Findings produced under an older evidence contract cannot safely
+		// instruct a repair. Recheck the saved candidate and preserve its
+		// existing durable attempt budget instead of buying a new assembly.
+		state.Issues = nil
+		state.GroundingIssueHistory = nil
+	}
+	state.GroundingFindingPolicy = groundingFindingPolicyVersion
 	item, extraction, preCVEs := state.Item, state.Extraction, state.PreCVEs
 	score, confidence, briefYAML := state.Score, state.Confidence, state.BriefYAML
 	var err error

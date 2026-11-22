@@ -81,6 +81,13 @@ func (d *DB) DeleteProcessingCheckpoint(id string) error {
 	_, err := d.db.Exec("DELETE FROM processing_checkpoints WHERE source_id=?", id)
 	return err
 }
+
+// DeleteProcessingCheckpointIfUnchanged removes only the exact snapshot read
+// by the caller. A replacement can share the same source and input key.
+func (d *DB) DeleteProcessingCheckpointIfUnchanged(cp ProcessingCheckpoint) error {
+	_, err := d.db.Exec("DELETE FROM processing_checkpoints WHERE source_id=? AND input_key=? AND payload=? AND retry_at=?", cp.SourceID, cp.InputKey, cp.Payload, cp.RetryAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
 func (d *DB) RecordProcessingEvent(id, key, attempt, stage, outcome string) error {
 	_, err := d.db.Exec("INSERT INTO processing_history(source_id,input_key,attempt_id,stage,outcome,created_at) VALUES(?,?,?,?,?,?)", id, key, attempt, stage, outcome, time.Now().UTC().Format(time.RFC3339Nano))
 	return err

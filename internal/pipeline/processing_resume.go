@@ -18,27 +18,32 @@ import (
 // Increment when source interpretation, prompts or validation semantics change.
 const processingPolicyVersion = "evidence-quality-2026-11-15-v5"
 
+// Changes to the finding-evidence contract require a fresh grounding check,
+// but do not invalidate the separately validated and paid-for assembly.
+const groundingFindingPolicyVersion = "source-evidence-v2"
+
 type processingCandidate struct {
-	Stage                 string
-	PolicyKey             string
-	EvidenceKey           string
-	AttemptID             string
-	Item                  scraper.RawItem
-	Extraction            *ExtractionResult
-	PreCVEs               []string
-	Score, Confidence     float64
-	BriefYAML             string
-	Issues                []string
-	GroundingIssueHistory []string
-	RebuildDraftID        string
-	ReviewHold            bool
-	MergeDraftID          string
-	MergeTargetKey        string
-	MergeAttempts         int
-	GroundingFailure      *processingGroundingFailure
-	ClaimAssessment       *processingClaimAssessment
-	RefreshRetries        map[string]time.Time
-	RefreshRetryAttempts  map[string]int
+	Stage                  string
+	PolicyKey              string
+	EvidenceKey            string
+	AttemptID              string
+	Item                   scraper.RawItem
+	Extraction             *ExtractionResult
+	PreCVEs                []string
+	Score, Confidence      float64
+	BriefYAML              string
+	Issues                 []string
+	GroundingFindingPolicy string
+	GroundingIssueHistory  []string
+	RebuildDraftID         string
+	ReviewHold             bool
+	MergeDraftID           string
+	MergeTargetKey         string
+	MergeAttempts          int
+	GroundingFailure       *processingGroundingFailure
+	ClaimAssessment        *processingClaimAssessment
+	RefreshRetries         map[string]time.Time
+	RefreshRetryAttempts   map[string]int
 }
 
 // trackGroundingIssueCycle records stable identities for rejected grounding

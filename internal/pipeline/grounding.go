@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"strings"
 
 	"github.com/craftedsignal/threat-bot/internal/llm"
@@ -87,6 +88,8 @@ var claimGroundingReportSchema = llm.MustSchemaOf[struct {
 }]()
 
 const maxSourceLen = 24000
+
+var groundingURLPattern = regexp.MustCompile(`(?i)https?://[^\s<>"')\]]+`)
 
 // Routing ratings are generated decisions, not factual quotations. Only
 // absence-of-rating findings are ignored; impact and exploitation disputes
@@ -175,7 +178,11 @@ func validateMaterialOmission(issue groundingIssue, source, brief string) error 
 	scoped := materialQuoteInScopedFact(issue, source, doc)
 	var quotedFact cnaSourceFact
 	structuredQuote := json.Unmarshal([]byte(issue.SourceQuote), &quotedFact) == nil && quotedFact.CVEID != ""
-	mentionsSubject := strings.Contains(quote, subject) || productNameLocation(issue.SourceQuote, issue.Subject) != nil
+	// A URL identifies provenance, not a factual passage about the product.
+	// Do not let a product or CVE appearing only in a URL satisfy the subject
+	// check for prose (structured facts use their explicit scope instead).
+	proseQuote := groundingURLPattern.ReplaceAllString(issue.SourceQuote, "")
+	mentionsSubject := strings.Contains(normalizeForQuote(proseQuote), subject) || productNameLocation(proseQuote, issue.Subject) != nil
 	// A complete structured record carries a CVE even when its product is a
 	// neighbor. Its metadata must not bypass the explicit product binding.
 	if !scoped && (structuredQuote || !materialQuoteInProse(issue.SourceQuote, source) || !mentionsSubject) {

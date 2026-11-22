@@ -33,25 +33,17 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	workStarted := false
 	var mergeExtraction *ExtractionResult
 	var groundingIssueHistory []string
-	var staleCheckpointInputKey string
-	var staleCheckpointPayload string
+	var staleCheckpoint *storage.ProcessingCheckpoint
 	defer func() {
 		// Keep the previous checkpoint (and its normalized grounding findings)
 		// until the replacement candidate is durable. A transient failure during
 		// quality, extraction, or assembly must not reset the repeated-finding
 		// guard on the next poll.
-		if resultErr != nil || staleCheckpointInputKey == "" {
+		if resultErr != nil || staleCheckpoint == nil {
 			return
 		}
-		current, err := p.db.GetProcessingCheckpoint(item.SourceID)
-		if err != nil {
-			p.logger.Error("checking stale processing checkpoint", "source_id", item.SourceID, "error", err)
-			return
-		}
-		if current != nil && current.InputKey == staleCheckpointInputKey && current.Payload == staleCheckpointPayload {
-			if err := p.db.DeleteProcessingCheckpoint(item.SourceID); err != nil {
-				p.logger.Error("deleting completed stale processing checkpoint", "source_id", item.SourceID, "error", err)
-			}
+		if err := p.db.DeleteProcessingCheckpointIfUnchanged(*staleCheckpoint); err != nil {
+			p.logger.Error("deleting completed stale processing checkpoint", "source_id", item.SourceID, "error", err)
 		}
 	}()
 	defer func() {
@@ -155,10 +147,11 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				// they must not erase the same unresolved product-level finding.
 				// Carry only normalized issue identities; never reuse a verdict
 				// or repaired brief from the old evidence.
-				groundingIssueHistory = append([]string(nil), state.GroundingIssueHistory...)
+				if state.GroundingFindingPolicy == groundingFindingPolicyVersion {
+					groundingIssueHistory = append([]string(nil), state.GroundingIssueHistory...)
+				}
 				if len(groundingIssueHistory) > 0 {
-					staleCheckpointInputKey = cp.InputKey
-					staleCheckpointPayload = cp.Payload
+					staleCheckpoint = cp
 				} else if mergeExtraction == nil {
 					// Preserve the established invalidation semantics for ordinary
 					// checkpoints. Only checkpoints carrying repeated-finding state
@@ -300,7 +293,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Warn("extraction failed, continuing without", "source_id", item.SourceID, "error", extractErr)
 		}
 	}
-	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, RebuildDraftID: rebuildDraftID}
+	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, GroundingFindingPolicy: groundingFindingPolicyVersion, RebuildDraftID: rebuildDraftID}
 	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
 }
 

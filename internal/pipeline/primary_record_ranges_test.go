@@ -274,7 +274,7 @@ func TestVerifiedPrimaryEvidenceExplainsUnrenderableLinuxScope(t *testing.T) {
 	}
 	p := &Pipeline{cveVerifier: v}
 	evidence := p.verifiedPrimaryEvidence([]string{"CVE-2026-99462"})
-	for _, want := range []string{"Applicability range limitation", "CVE-2026-99462", "Linux", "commit", "original_commit_for_fix", "cannot be mapped safely to release-version ranges"} {
+	for _, want := range []string{"Applicability range limitation", "Apply each line only to a brief product that matches the product named on that line", "never transfer it to another product", "CVE-2026-99462", "Linux", "commit", "original_commit_for_fix", "cannot be mapped safely to release-version ranges"} {
 		if !strings.Contains(evidence, want) {
 			t.Errorf("verified evidence missing %q:\n%s", want, evidence)
 		}

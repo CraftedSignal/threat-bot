@@ -191,7 +191,7 @@ func unresolvedPrimaryScopeGuidance(primary primaryRecordFacts) string {
 	for i := range gaps {
 		gaps[i] = "- " + gaps[i]
 	}
-	return "Applicability range limitation (machine-derived; not a claim of fixed versions):\n" + strings.Join(gaps, "\n") + "\n"
+	return "Applicability range limitation (machine-derived; not a claim of fixed versions). Apply each line only to a brief product that matches the product named on that line; never transfer it to another product:\n" + strings.Join(gaps, "\n") + "\n"
 }
 
 func unresolvedPrimaryScopeGaps(primary primaryRecordFacts, products []string) []string {

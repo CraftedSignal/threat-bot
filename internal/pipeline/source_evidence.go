@@ -132,7 +132,9 @@ func (p *Pipeline) verifiedPrimaryFacts(ids []string) (string, primaryRecordFact
 		evidence.WriteString("Coverage incomplete: size limits or cross-record references omitted source fields. Do not infer missing facts.\n")
 	}
 	if guidance := unresolvedPrimaryScopeGuidance(facts); guidance != "" {
-		evidence.WriteString(guidance)
+		// Keep machine-derived guidance inside the same evidence budget as the
+		// source facts. A dense CVE record must not bypass the bounded input size.
+		add(strings.TrimSuffix(guidance, "\n"))
 	}
 	return "Verified primary CVE evidence. Keep each fact attached to its CVE and product; a record-wide solution is not a fix for every product. Resolve conflicts through explicit uncertainty or editorial review.\n" + evidence.String(), facts
 }

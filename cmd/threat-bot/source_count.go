@@ -63,6 +63,9 @@ func countEnabledSources(cfg *config.Config) int {
 	if cfg.Sources.Unit42.Enabled {
 		count++
 	}
+	if cfg.Sources.SOCRadar.Enabled {
+		count++
+	}
 	if cfg.Sources.MicrosoftThreatIntel.Enabled {
 		count++
 	}

@@ -204,6 +204,10 @@ func NewUnit42() *RSS {
 	return NewRSS("unit42", "https://unit42.paloaltonetworks.com/feed/")
 }
 
+func NewSOCRadar() *RSS {
+	return NewRSS("socradar", "https://socradar.io/blog/category/cyber-threat-intelligence/feed/")
+}
+
 func NewMicrosoftThreatIntel() *RSS {
 	return NewRSS("microsoft-threat-intel", "https://www.microsoft.com/en-us/security/blog/feed/")
 }

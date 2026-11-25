@@ -39,6 +39,26 @@ func TestLoadParsesBridgedSourceInlineFields(t *testing.T) {
 	}
 }
 
+func TestLoadParsesSOCRadarSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `sources:
+  socradar:
+    enabled: true
+    poll_interval: 6h
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Sources.SOCRadar; !got.Enabled || got.PollInterval != 6*time.Hour {
+		t.Fatalf("sources.socradar = %+v, want enabled with a 6h poll interval", got)
+	}
+}
+
 // config.example.yaml is the only config checked into git (.gitignore excepts
 // it from *.yaml), so it is what CI can verify. It ships the bridged source
 // disabled with an empty feed_url.
@@ -57,6 +77,9 @@ func TestLoadParsesExampleConfig(t *testing.T) {
 	}
 	if got.FeedURL != "" {
 		t.Errorf("sources.ronin66.feed_url = %q, want empty", got.FeedURL)
+	}
+	if got := cfg.Sources.SOCRadar; got.Enabled || got.PollInterval != 6*time.Hour {
+		t.Errorf("sources.socradar = %+v, want disabled with a 6h poll interval", got)
 	}
 }
 

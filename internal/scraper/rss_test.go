@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,29 @@ func TestRSSScraper(t *testing.T) {
 	}
 	if len(allItems) != 2 {
 		t.Fatalf("expected 2 items with zero since, got %d", len(allItems))
+	}
+}
+
+func TestSOCRadarUsesCyberThreatIntelligenceCategoryFeed(t *testing.T) {
+	s := NewSOCRadar()
+	if s.Name() != "socradar" {
+		t.Fatalf("Name() = %q, want socradar", s.Name())
+	}
+	if s.url != "https://socradar.io/blog/category/cyber-threat-intelligence/feed/" {
+		t.Fatalf("feed URL = %q, want the Cyber Threat Intelligence category RSS feed", s.url)
+	}
+}
+
+func TestSOCRadarLiveFeed(t *testing.T) {
+	if os.Getenv("SOCRADAR_LIVE_TEST") != "1" {
+		t.Skip("set SOCRADAR_LIVE_TEST=1 to fetch the public SOCRadar RSS feed")
+	}
+	items, err := NewSOCRadar().Poll(context.Background(), time.Now().Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("SOCRadar feed poll failed: %v", err)
+	}
+	if len(items) == 0 {
+		t.Fatal("SOCRadar feed returned no items in the last 30 days")
 	}
 }
 

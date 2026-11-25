@@ -112,6 +112,7 @@ var sourceAuthority = map[string]int{
 	"mandiant":               3,
 	"talos":                  3,
 	"unit42":                 3,
+	"socradar":               3,
 	"crowdstrike":            3,
 	"microsoft-threat-intel": 3,
 	"sophos-xops":            3,

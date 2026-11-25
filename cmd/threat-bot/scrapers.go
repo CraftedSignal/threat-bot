@@ -108,6 +108,9 @@ func registerScrapers(runner *scraper.Runner, cfg *config.Config, ghTokenFn func
 	if cfg.Sources.Unit42.Enabled {
 		runner.RegisterWithInterval(scraper.NewUnit42(), cfg.Sources.Unit42.PollInterval)
 	}
+	if cfg.Sources.SOCRadar.Enabled {
+		runner.RegisterWithInterval(scraper.NewSOCRadar(), cfg.Sources.SOCRadar.PollInterval)
+	}
 	if cfg.Sources.MicrosoftThreatIntel.Enabled {
 		runner.RegisterWithInterval(scraper.NewMicrosoftThreatIntel(), cfg.Sources.MicrosoftThreatIntel.PollInterval)
 	}

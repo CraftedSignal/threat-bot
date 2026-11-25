@@ -22,6 +22,7 @@ func TestRegisterScrapersHonorsConfiguredIntervals(t *testing.T) {
 	cfg.Sources.NVD = config.SourceToggle{Enabled: true} // interval unset
 	cfg.Sources.RedditNetSec = config.SourceToggle{Enabled: true}
 	cfg.Sources.PwnWatch = config.SourceToggle{Enabled: true, PollInterval: time.Hour}
+	cfg.Sources.SOCRadar = config.SourceToggle{Enabled: true, PollInterval: 6 * time.Hour}
 	cfg.Sources.GossiTheDogThreatHunting = config.SourceToggle{Enabled: true, PollInterval: 3 * time.Hour}
 	cfg.Sources.GossiTheDogMastodon = config.SourceToggle{Enabled: true, PollInterval: 30 * time.Minute}
 
@@ -35,6 +36,7 @@ func TestRegisterScrapersHonorsConfiguredIntervals(t *testing.T) {
 		"nvd":                       time.Hour, // conservative default when unset
 		"reddit-netsec":             5 * time.Minute,
 		"pwn-watch":                 time.Hour,
+		"socradar":                  6 * time.Hour,
 		"gossithedog-threathunting": 3 * time.Hour,
 		"gossithedog-mastodon":      30 * time.Minute,
 	}
@@ -42,6 +44,14 @@ func TestRegisterScrapersHonorsConfiguredIntervals(t *testing.T) {
 		if got[name] != interval {
 			t.Errorf("%s poll interval = %v, want %v", name, got[name], interval)
 		}
+	}
+}
+
+func TestCountEnabledSourcesIncludesSOCRadar(t *testing.T) {
+	var cfg config.Config
+	cfg.Sources.SOCRadar.Enabled = true
+	if got := countEnabledSources(&cfg); got != 1 {
+		t.Fatalf("countEnabledSources() = %d, want 1", got)
 	}
 }
 

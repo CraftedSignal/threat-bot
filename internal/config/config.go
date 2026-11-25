@@ -113,6 +113,7 @@ type SourcesConfig struct {
 	Talos                SourceToggle `yaml:"talos"`
 	Mandiant             SourceToggle `yaml:"mandiant"`
 	Unit42               SourceToggle `yaml:"unit42"`
+	SOCRadar             SourceToggle `yaml:"socradar"`
 	MicrosoftThreatIntel SourceToggle `yaml:"microsoft_threat_intel"`
 	SophosXOps           SourceToggle `yaml:"sophos_xops"`
 	Huntress             SourceToggle `yaml:"huntress"`

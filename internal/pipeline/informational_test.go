@@ -41,3 +41,12 @@ func TestIsInformationalItem_ProductAnnouncementWithCVEIsNotInformational(t *tes
 		t.Fatalf("isInformationalItem() = %q, want empty", got)
 	}
 }
+
+func TestSOCRadarUsesCommercialResearchSourceMetadata(t *testing.T) {
+	if got := defaultSourceConfidence["socradar"]; got != 0.80 {
+		t.Errorf("SOCRadar source confidence = %v, want 0.80", got)
+	}
+	if got := getSourceAuthority("socradar"); got != 3 {
+		t.Errorf("SOCRadar source authority = %d, want 3", got)
+	}
+}

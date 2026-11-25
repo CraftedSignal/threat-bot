@@ -147,6 +147,7 @@ var defaultSourceConfidence = map[string]float64{
 	"talos":                  0.85,
 	"mandiant":               0.90,
 	"unit42":                 0.85,
+	"socradar":               0.80,
 	"microsoft-threat-intel": 0.85,
 	"sophos-xops":            0.80,
 	"huntress":               0.80,

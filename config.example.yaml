@@ -16,6 +16,9 @@ sources:
   cisa_kev:
     enabled: true
     poll_interval: 1h
+  socradar:
+    enabled: false
+    poll_interval: 6h
   # Token-bearing bridge feeds are opt-in and belong in private config.
   ronin66:
     enabled: false

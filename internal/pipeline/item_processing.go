@@ -184,6 +184,13 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		}
 	}
 
+	if mergeExtraction == nil {
+		if target, ok := p.sourceRevisionTarget(item); ok && p.sourceRevisionUnchanged(item, target) {
+			p.logger.Info("source revision keeps its canonical brief's source text", "source_id", item.SourceID, "draft_id", target.DraftID)
+			return p.markSeen(item)
+		}
+	}
+
 	workStarted = true
 	// A new policy or evidence revision starts a new bounded repair budget.
 	if err := p.db.ClearGroundingAttempts(item.SourceID); err != nil {
@@ -332,6 +339,13 @@ func (p *Pipeline) routePreExtraction(ctx context.Context, key string, state pro
 		// This is an editorial correction hold, not a claim retry stage.
 		state.Stage, state.ClaimAssessment = "", nil
 		return routing, true, p.holdDraftRebuild(key, state, item.Content, "NVD source correction downgrades or retracts the record; canonical claims require review")
+	}
+	if routing.RebuildDraftID != "" && p.isSourceRevisionTarget(item, routing.RebuildDraftID) {
+		// Any rebuilt narrative would be held as a conflicting correction, so
+		// hold the revised evidence before paying for the rebuild.
+		state.RebuildDraftID = routing.RebuildDraftID
+		state.Stage, state.ClaimAssessment = "", nil
+		return routing, true, p.holdDraftRebuild(key, state, item.Content, sourceRevisionHoldReason)
 	}
 	if decision == DedupNew && item.CorroborationOnly {
 		p.logger.Info("skipping unmatched corroboration-only item", "source_id", item.SourceID, "source", item.Source)

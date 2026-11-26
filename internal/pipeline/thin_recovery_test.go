@@ -181,13 +181,15 @@ func TestChangedSourceCorrectionIsHeldWithoutConsumingRevision(t *testing.T) {
 	if err != nil || !ok || !strings.Contains(reason, "correction") {
 		t.Fatalf("missing explicit correction review hold: %q %v", reason, err)
 	}
-	if quality != 1 || assemblies != 1 || checks == 0 {
-		t.Fatalf("correction bypassed independent rebuild: quality=%d assembly=%d grounding=%d", quality, assemblies, checks)
+	// A rebuilt narrative could only be held, so the hold carries the revised
+	// evidence without paying for quality, assembly or grounding.
+	if quality != 0 || assemblies != 0 || checks != 0 {
+		t.Fatalf("correction paid for a rebuild that could only be held: quality=%d assembly=%d grounding=%d", quality, assemblies, checks)
 	}
 	if err := p.processItem(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
-	if quality != 1 || assemblies != 1 || checks != 1 {
+	if quality != 0 || assemblies != 0 || checks != 0 {
 		t.Fatalf("editorial hold repeated model work: quality=%d assembly=%d grounding=%d", quality, assemblies, checks)
 	}
 }

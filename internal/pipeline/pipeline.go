@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -298,13 +297,6 @@ func New(cfg Config) *Pipeline {
 		}
 	}
 
-	policyConfig, _ := json.Marshal(struct {
-		Models            string
-		Threshold         float64
-		Confidence        map[string]float64
-		Signals           map[string]int
-		Roundup, Campaign bool
-	}{cfg.ProcessingPolicy, cfg.QualityThreshold, confidence, cfg.SourceSignalThresholds, cfg.RoundupConsolidation, cfg.CampaignConsolidation})
 	return &Pipeline{
 		db:                     cfg.DB,
 		dedup:                  NewDeduplicator(cfg.DB, cfg.Logger),
@@ -318,7 +310,7 @@ func New(cfg Config) *Pipeline {
 		cveEnricher:            cveEnricher,
 		grounding:              NewGroundingChecker(cfg.LLMClient).WithLogger(cfg.Logger).WithRepairClient(cfg.RepairLLMClient),
 		maxGroundingAttempts:   groundingAttemptLimit(cfg.MaxGroundingAttempts),
-		processingPolicy:       string(policyConfig),
+		processingPolicy:       processingPolicyConfig(cfg),
 		retryBackoff:           configuredRetryBackoff(cfg.RetryBackoff),
 		enricher:               NewContentEnricher(),
 		correlator:             correlator,

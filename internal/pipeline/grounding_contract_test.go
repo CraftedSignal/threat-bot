@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/craftedsignal/threat-bot/internal/llm"
 	"github.com/craftedsignal/threat-bot/internal/scraper"
 	"gopkg.in/yaml.v3"
 )
@@ -198,5 +199,140 @@ func TestReleaseBoundFixOmissionKeepsBlocking(t *testing.T) {
 		if _, exempt := primaryScopeGapRecorded(issue, "Verified primary CVE evidence.\n"+quote+"\nOriginal source:\n", map[string]any{"source_assessment": map[string]any{"gaps": []any{"anything"}}}); exempt {
 			t.Fatalf("release-bound record treated as an unmappable scope gap: %q", quote)
 		}
+	}
+}
+
+// contractStageLLM scripts the checker's first and later reports and the
+// repair's revised brief, and records every paid model stage in call order.
+type contractStageLLM struct {
+	noopLLM
+	t       *testing.T
+	reports []groundingReport
+	repair  string
+	stages  []string
+}
+
+func (c *contractStageLLM) GenerateStructured(ctx context.Context, prompt, system string, _ *llm.Schema, out any) error {
+	c.stages = append(c.stages, llm.CallMetadataFromContext(ctx).Stage)
+	if report, ok := out.(*groundingReport); ok {
+		if len(c.reports) == 0 {
+			*report = groundingReport{}
+			return nil
+		}
+		*report, c.reports = c.reports[0], c.reports[1:]
+		return nil
+	}
+	if system != groundingRepairSystemPrompt {
+		c.t.Fatalf("unexpected model stage %q", llm.CallMetadataFromContext(ctx).Stage)
+	}
+	return structuredFromText(c.repair, out)
+}
+
+const keptClaimSentence = "Attackers chained the flaw with a Windows kernel exploit to gain SYSTEM privileges."
+
+func keptClaimBrief(content string) string {
+	return strings.Replace(validWindowsPathBriefYAML, "content: Review Windows process creation telemetry for the binary path described by the source.", "content: "+content, 1)
+}
+
+func TestRepairThatKeepsFlaggedClaimSkipsRecheck(t *testing.T) {
+	original := keptClaimBrief("Review Windows process creation telemetry. " + keptClaimSentence)
+	if !strings.Contains(original, keptClaimSentence) {
+		t.Fatal("fixture must state the flagged claim")
+	}
+	finding := groundingIssue{Kind: groundingKindUnsupported, Field: "content", BriefQuote: keptClaimSentence, Reason: "The source reports no exploit chain or privilege escalation."}
+	for _, tc := range []struct {
+		name, repair string
+		stages       []string
+		quarantined  bool
+	}{
+		{"repair kept the sentence", keptClaimBrief("Review Windows process creation telemetry for cmd.exe. " + keptClaimSentence), []string{"grounding", "grounding_repair"}, true},
+		{"repair removed the sentence", keptClaimBrief("Review Windows process creation telemetry for cmd.exe."), []string{"grounding", "grounding_repair", "grounding_recheck"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := mustOpenTestDB(t)
+			defer db.Close()
+			client := &contractStageLLM{t: t, reports: []groundingReport{{Issues: []groundingIssue{finding}}}, repair: tc.repair}
+			var logs bytes.Buffer
+			p := New(Config{DB: db, LLMClient: client, Logger: slog.New(slog.NewTextHandler(&logs, nil)), MaxGroundingAttempts: 5})
+			item := scraper.RawItem{SourceID: "kept-claim:windows", Source: "research", URL: "https://vendor.example/windows", Title: "Windows path detection", Content: strings.Repeat("Windows process creation telemetry shows cmd.exe. ", 10), Enriched: true}
+			key := p.processingInputKey(item)
+			state := processingCandidate{Item: item, BriefYAML: original, Score: 5, Confidence: 1, AttemptID: "attempt-1"}
+			if err := p.processCandidate(context.Background(), key, state); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(client.stages, ",") != strings.Join(tc.stages, ",") {
+				t.Fatalf("paid model stages = %v, want %v", client.stages, tc.stages)
+			}
+			reason, quarantined, err := db.PipelineQuarantineReason(item.SourceID)
+			if err != nil || quarantined != tc.quarantined {
+				t.Fatalf("quarantined = %v (%q, %v), want %v", quarantined, reason, err, tc.quarantined)
+			}
+			if !tc.quarantined {
+				if strings.Contains(logs.String(), "repair kept flagged claim") {
+					t.Fatalf("removed claim logged as kept: %s", logs.String())
+				}
+				return
+			}
+			if !strings.Contains(reason, "ungrounded after 1 attempts") || !strings.Contains(reason, keptClaimSentence) {
+				t.Fatalf("quarantine reason does not name the kept claim: %q", reason)
+			}
+			if !strings.Contains(logs.String(), "repair kept flagged claim; skipping recheck") || !strings.Contains(logs.String(), "fields=[content]") {
+				t.Fatalf("skipped recheck not auditable: %s", logs.String())
+			}
+			if seen, err := db.HasSeen(item.SourceID); err != nil || !seen {
+				t.Fatalf("quarantined item not marked seen: %v %v", seen, err)
+			}
+			summary, err := db.ProcessingSummary(time.Now().Add(-time.Hour))
+			if err != nil || summary.GroundingRejected != 1 {
+				t.Fatalf("kept claim did not record one rejected grounding event: %+v %v", summary, err)
+			}
+		})
+	}
+}
+
+// A resumed candidate has only saved Issues strings: without the structured
+// first-check findings, the pre-recheck shortcut must not apply.
+func TestKeptClaimCheckNeedsStructuredFindings(t *testing.T) {
+	brief := keptClaimBrief(keptClaimSentence)
+	findings := []GroundingFinding{{Kind: groundingKindUnsupported, Field: "content", BriefQuote: keptClaimSentence}}
+	if kept := keptFlaggedClaims(brief, brief, "", nil, nil); len(kept) != 0 {
+		t.Fatalf("saved issue strings triggered the shortcut: %+v", kept)
+	}
+	for _, tc := range []struct {
+		name     string
+		finding  GroundingFinding
+		resolved map[int]bool
+		kept     bool
+	}{
+		{"kept sentence", findings[0], nil, true},
+		{"resolved in code", findings[0], map[int]bool{0: true}, false},
+		{"short quote", GroundingFinding{Kind: groundingKindUnsupported, Field: "content", BriefQuote: "SYSTEM"}, nil, false},
+		{"material omission", GroundingFinding{Kind: groundingKindMaterialOmission, Field: "content", BriefQuote: keptClaimSentence}, nil, false},
+		{"section name as field", GroundingFinding{Kind: groundingKindUnsupported, Field: "Attack Chain", BriefQuote: keptClaimSentence}, nil, true},
+		{"identity field only", GroundingFinding{Kind: groundingKindUnsupported, Field: "slug", BriefQuote: "2026-10-windows-path"}, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if kept := keptFlaggedClaims(brief, brief, "", []GroundingFinding{tc.finding}, tc.resolved); (len(kept) > 0) != tc.kept {
+				t.Fatalf("kept = %+v, want %v", kept, tc.kept)
+			}
+		})
+	}
+}
+
+// A flagged technique mapping is the claim of a ttps entry; its evidence
+// sentence may stay when the repair corrects the mapping.
+func TestKeptTTPClaimFollowsTheMapping(t *testing.T) {
+	const evidence = "An unauthenticated attacker can send a crafted request to the management interface."
+	entry := func(tactic, technique, name string) string {
+		return "  - tactic_id: " + tactic + "\n    tactic_name: x\n    technique_id: " + technique + "\n    technique_name: " + name + "\n    evidence: " + evidence + "\n"
+	}
+	before := validWindowsPathBriefYAML + "ttps:\n" + entry("TA0004", "T1068", "Exploitation for Privilege Escalation")
+	finding := GroundingFinding{Kind: groundingKindUnsupported, Field: "ttps", BriefQuote: evidence}
+	if kept := keptFlaggedClaims(before, before, "", []GroundingFinding{finding}, nil); len(kept) != 1 {
+		t.Fatalf("unchanged flagged mapping not detected: %+v", kept)
+	}
+	corrected := validWindowsPathBriefYAML + "ttps:\n" + entry("TA0001", "T1190", "Exploit Public-Facing Application")
+	if kept := keptFlaggedClaims(before, corrected, "", []GroundingFinding{finding}, nil); len(kept) != 0 {
+		t.Fatalf("corrected mapping with the same evidence counted as kept: %+v", kept)
 	}
 }

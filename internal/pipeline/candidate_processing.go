@@ -208,6 +208,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		if err != nil {
 			return fmt.Errorf("grounding repair source reference: %w", err)
 		}
+		flaggedYAML := cleanedYAML
 		cleanedYAML, _, err = p.validator.Validate(repaired)
 		if err != nil {
 			return p.quarantineInvalidBrief(item, &InvalidBriefYAMLError{Err: fmt.Errorf("grounding repair validation: %w", err), Raw: repaired})
@@ -216,6 +217,19 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		cleanedYAML, _ = p.cveVerifier.Verify(ctx, cleanedYAML)
 		cleanedYAML = p.injectSourceRanges(cleanedYAML, item)
 		cleanedYAML = normalizeDetectionSeverity(cleanedYAML, item)
+		// A repair that still states a flagged claim verbatim almost never
+		// passes its recheck, so do not pay for one. Only this run's first
+		// check carries structured findings; a resumed candidate has only
+		// saved Issues strings and keeps the recheck.
+		if kept := keptFlaggedClaims(flaggedYAML, cleanedYAML, item.URL, groundingResult.Findings, nil); len(kept) > 0 {
+			issues := make([]string, len(kept))
+			fields := make([]string, len(kept))
+			for i, claim := range kept {
+				issues[i], fields[i] = claim.Finding.Issue, claim.Field
+			}
+			p.logger.Warn("repair kept flagged claim; skipping recheck", "source_id", item.SourceID, "attempt", attempts, "fields", fields, "issues", issues)
+			return p.quarantineKeptGroundingClaims(key, &state, cleanedYAML, attempts, issues)
+		}
 		state.BriefYAML, state.Issues = cleanedYAML, nil
 		state.GroundingRecheckFailed = false
 		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {
@@ -497,4 +511,23 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	}
 
 	return nil
+}
+
+// quarantineKeptGroundingClaims ends a candidate whose repair kept a flagged
+// claim, with the bookkeeping of a recheck that repeats a finding: the
+// rejection outcome, the finding identities in the durable history and a
+// rejected grounding event precede the quarantine, so audits and the
+// repeated-finding guard read the same record either way.
+func (p *Pipeline) quarantineKeptGroundingClaims(key string, state *processingCandidate, briefYAML string, attempts int, issues []string) error {
+	p.decisions.record(outcomeRejectedUngrounded)
+	state.GroundingIssueHistory, _ = trackGroundingIssueCycle(state.GroundingIssueHistory, issues)
+	state.BriefYAML, state.Issues = briefYAML, issues
+	state.GroundingRecheckFailed = true
+	if err := p.saveCandidate(key, *state, time.Now().Add(p.groundingRetryDelay(attempts))); err != nil {
+		return err
+	}
+	if err := p.db.RecordProcessingEvent(state.Item.SourceID, key, state.AttemptID, "grounding", "rejected"); err != nil {
+		return err
+	}
+	return p.quarantineUngrounded(state.Item, briefYAML, &UngroundedBriefError{Attempts: attempts, Issues: issues})
 }

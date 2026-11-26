@@ -3,6 +3,7 @@ package pipeline
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -208,4 +209,115 @@ func primaryScopeGapKey(fact cnaSourceFact, entry cnaAffectedEntry) string {
 		product = strings.TrimSpace(entry.Product)
 	}
 	return strings.ToUpper(fact.CVEID) + "\x00" + scopeProductKey(product)
+}
+
+// repairClaimFields are the brief fields whose text the repair model writes
+// and in which a surviving quote means the flagged claim survived. Identity
+// fields are restored by mergeGroundingRepair, exploitation evidence is
+// restored or downgraded by the pipeline, source and QA assessments are
+// generated metadata, and a rule or IOC can keep a quoted value while its
+// flagged logic or context changed, so text surviving there proves nothing.
+var repairClaimFields = []string{"title", "summary", "content", "threat_actor", "severity", "tags", "affected_vendors", "affected_products", "affected_os", "cpes", "ttps", "action_plan"}
+
+// minKeptClaimQuote is the shortest normalized brief quote whose survival
+// counts as a kept claim. Shorter quotes ("linux", "high") recur in
+// legitimate text and would not identify the flagged statement.
+const minKeptClaimQuote = 12
+
+// keptFlaggedClaim is an unsupported claim the repaired brief still states
+// verbatim, and the field it was found in.
+type keptFlaggedClaim struct {
+	Finding GroundingFinding
+	Field   string
+}
+
+// keptFlaggedClaims returns the first check's unsupported claims that the
+// repaired brief still states verbatim. In production nearly every such
+// repair failed its recheck, while repairs that passed had removed the quote,
+// so the recheck is not worth paying for. Quotes are matched against text
+// values only, never YAML keys, in the field the checker named when that is
+// a claim field and otherwise (a content section such as "Impact") in every
+// claim field, as the checker reads the brief. A technique mapping is the
+// claim of a ttps entry, not its evidence sentence: a ttps quote is kept only
+// while an entry quoting it keeps a mapping that quoted it before the repair.
+// Findings resolved in code are skipped.
+func keptFlaggedClaims(beforeYAML, afterYAML, itemURL string, findings []GroundingFinding, resolved map[int]bool) []keptFlaggedClaim {
+	before := parseBriefFrontmatter(groundingView(beforeYAML, itemURL))
+	after := parseBriefFrontmatter(groundingView(afterYAML, itemURL))
+	if after == nil {
+		return nil
+	}
+	var kept []keptFlaggedClaim
+	for i, finding := range findings {
+		if resolved[i] || finding.Kind != groundingKindUnsupported {
+			continue
+		}
+		quote := normalizeForQuote(finding.BriefQuote)
+		if len([]rune(quote)) < minKeptClaimQuote {
+			continue
+		}
+		fields := repairClaimFields
+		if head := groundingFieldHead(finding.Field); slices.Contains(repairClaimFields, head) {
+			fields = []string{head}
+		}
+		for _, field := range fields {
+			if claimQuoteKept(field, quote, before, after) {
+				kept = append(kept, keptFlaggedClaim{Finding: finding, Field: field})
+				break
+			}
+		}
+	}
+	return kept
+}
+
+func claimQuoteKept(field, quote string, before, after map[string]any) bool {
+	if field != "ttps" {
+		return textValuesContain(after[field], quote)
+	}
+	mappings := map[string]bool{}
+	for _, entry := range yamlAnyList(before["ttps"]) {
+		if textValuesContain(entry, quote) {
+			mappings[ttpMapping(entry)] = true
+		}
+	}
+	for _, entry := range yamlAnyList(after["ttps"]) {
+		if textValuesContain(entry, quote) && mappings[ttpMapping(entry)] {
+			return true
+		}
+	}
+	return false
+}
+
+// textValuesContain reports whether any string value within v contains the
+// normalized quote.
+func textValuesContain(v any, quote string) bool {
+	switch value := v.(type) {
+	case string:
+		return strings.Contains(normalizeForQuote(value), quote)
+	case []any:
+		for _, item := range value {
+			if textValuesContain(item, quote) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range value {
+			if textValuesContain(item, quote) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ttpMapping identifies a ttps entry by its ATT&CK mapping, independent of its
+// names, evidence and confidence.
+func ttpMapping(entry any) string {
+	m, _ := asStringMap(entry)
+	var ids []string
+	for _, key := range []string{"tactic_id", "technique_id", "subtechnique_id"} {
+		value, _ := m[key].(string)
+		ids = append(ids, strings.ToUpper(strings.TrimSpace(value)))
+	}
+	return strings.Join(ids, "/")
 }

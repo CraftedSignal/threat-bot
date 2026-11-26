@@ -58,13 +58,14 @@ type GroundingResult struct {
 }
 
 // GroundingFinding is one blocking checker finding. SourceQuote is the
-// resolved, validated source text for material omissions.
+// resolved, validated source text for material omissions; Issue is the exact
+// Issues entry the finding produced.
 type GroundingFinding struct {
-	Kind, Field, Subject, BriefQuote, SourceQuote, Reason string
+	Kind, Field, Subject, BriefQuote, SourceQuote, Reason, Issue string
 }
 
-func newGroundingFinding(issue groundingIssue) GroundingFinding {
-	return GroundingFinding{Kind: issue.Kind, Field: issue.Field, Subject: issue.Subject, BriefQuote: issue.BriefQuote, SourceQuote: issue.SourceQuote, Reason: issue.Reason}
+func newGroundingFinding(issue groundingIssue, text string) GroundingFinding {
+	return GroundingFinding{Kind: issue.Kind, Field: issue.Field, Subject: issue.Subject, BriefQuote: issue.BriefQuote, SourceQuote: issue.SourceQuote, Reason: issue.Reason, Issue: text}
 }
 
 // Issue kinds the checker can report.
@@ -374,8 +375,9 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 			if g.unsatisfiableVersionOmission(issue, source, briefYAML) {
 				continue
 			}
-			result.Issues = append(result.Issues, fmt.Sprintf("%s: missing source-supported fact for %s: %s (source: %s)", issue.Field, issue.Subject, issue.Reason, issue.SourceQuote))
-			result.Findings = append(result.Findings, newGroundingFinding(issue))
+			text := fmt.Sprintf("%s: missing source-supported fact for %s: %s (source: %s)", issue.Field, issue.Subject, issue.Reason, issue.SourceQuote)
+			result.Issues = append(result.Issues, text)
+			result.Findings = append(result.Findings, newGroundingFinding(issue, text))
 			continue
 		}
 		if nonFactualRatingIssue(issue, briefYAML) {
@@ -391,16 +393,16 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 		// when the quote does not match the brief: the model sometimes quotes
 		// the source instead, and dropping those would publish the claim.
 		quote := normalizeForQuote(issue.BriefQuote)
-		finding := newGroundingFinding(issue)
+		text := fmt.Sprintf("%s: %s", issue.Field, issue.Reason)
 		if quote != "" && strings.Contains(normalizedBrief, quote) {
-			result.Issues = append(result.Issues, fmt.Sprintf("%s: %s (%s)", issue.Field, issue.Reason, issue.BriefQuote))
+			text = fmt.Sprintf("%s: %s (%s)", issue.Field, issue.Reason, issue.BriefQuote)
 		} else {
 			// An unmatched quote is not brief text: repair and verification
 			// must not treat it as something to delete.
-			finding.BriefQuote = ""
-			result.Issues = append(result.Issues, fmt.Sprintf("%s: %s", issue.Field, issue.Reason))
+			issue.BriefQuote = ""
 		}
-		result.Findings = append(result.Findings, finding)
+		result.Issues = append(result.Issues, text)
+		result.Findings = append(result.Findings, newGroundingFinding(issue, text))
 	}
 	result.Grounded = len(result.Issues) == 0
 	return result, nil

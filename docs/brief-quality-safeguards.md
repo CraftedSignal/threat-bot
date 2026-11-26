@@ -29,6 +29,16 @@ branches and dependency ranges are not copied to another product. Repair-rejecte
 scope cannot be reintroduced by later deterministic/CPE enrichment. Severity
 records whether its basis is a source rating, an operational policy, or model
 judgment; a source that omits a rating does not trigger an endless repair loop.
+Where a source states a rating (NVD/GHSA advisory data, the CERT-Bund title
+rating, or the agreed CVSS band of an exploit tracker's primary CVE records) the
+pipeline sets it after every assembly and repair, so the model cannot override
+it. Affected products a primary CVE record lists are added with their ranges
+before grounding, up to 25 entries; the remainder is named in a source gap.
+
+The grounding checker's contract is enforced in code: a material omission that
+demands versions its cited source passage does not state, or a release range the
+brief already records as unmappable, is dropped and logged. A repair that keeps
+a flagged claim verbatim is quarantined without paying for the recheck.
 
 Incoming merge claims are grounded against their own source, with deterministic
 CVE/IOC/source-URL identity checks in addition to the semantic verdict. Only the

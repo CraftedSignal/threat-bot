@@ -523,7 +523,7 @@ func setRecordProductOverflowGap(doc map[string]any, overflow []*recordProduct) 
 		return false
 	}
 	prior := nonEmptyTrimmed(yamlStringList(assessment["gaps"]))
-	kept := make([]string, 0, len(prior)+1)
+	kept := make([]string, 0, len(prior))
 	for _, line := range prior {
 		if strings.HasSuffix(line, recordProductOverflowSuffix) && line != gap {
 			continue

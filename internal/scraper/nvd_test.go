@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/bits"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -350,11 +351,20 @@ func TestNVDModifiedSweepFailureCannotReportCompletePoll(t *testing.T) {
 			}))
 			defer srv.Close()
 			_, err := (&NVD{client: srv.Client(), pageDelay: time.Millisecond}).pollFrom(context.Background(), time.Now().Add(-time.Hour), srv.URL)
-			if err == nil || !strings.Contains(err.Error(), "modified") {
-				t.Fatalf("incomplete modified sweep reported success: %v", err)
+			// An oversized window is narrowed one halving per request until it
+			// fits or is no longer than nvdMinModifiedWindow; a window that
+			// still overflows is read up to the page budget.
+			maxRequests := 1 + bits.Len(uint(time.Hour/nvdMinModifiedWindow)) + nvdMaxModifiedPages
+			if requests == 0 || requests > maxRequests {
+				t.Fatalf("modified request count=%d, want bounded 1..%d", requests, maxRequests)
 			}
-			if requests == 0 || requests > 5 {
-				t.Fatalf("modified request count=%d, want bounded 1..5", requests)
+			if mode == "http-error" && (err == nil || !strings.Contains(err.Error(), "modified")) {
+				t.Fatalf("failed modified sweep reported success: %v", err)
+			}
+			// TestNVDBulkUpdateBeyondBudgetStillProgresses covers the
+			// page-cap outcome: the budget is read and the skip is logged.
+			if mode == "page-cap" && err != nil {
+				t.Fatalf("capped sweep of an unnarrowable window stalled the poll: %v", err)
 			}
 		})
 	}

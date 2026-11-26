@@ -61,12 +61,40 @@ func (n *NVD) WithLogger(logger *slog.Logger) *NVD {
 func (n *NVD) Name() string { return "nvd" }
 
 func (n *NVD) Poll(ctx context.Context, since time.Time) ([]RawItem, error) {
-	return n.pollFrom(ctx, since, nvdAPIURL)
+	items, _, err := n.pollWindow(ctx, since, nvdAPIURL)
+	return items, err
+}
+
+// PollThrough reads NVD from since and reports the end of the window it read
+// completely. A correction backlog larger than the modified-record page budget
+// is read oldest first, one bounded window per poll, so the source catches up
+// instead of failing every poll on the same oversized window.
+func (n *NVD) PollThrough(ctx context.Context, since time.Time) ([]RawItem, time.Time, error) {
+	return n.pollWindow(ctx, since, nvdAPIURL)
 }
 
 func (n *NVD) pollFrom(ctx context.Context, since time.Time, apiURL string) ([]RawItem, error) {
-	pubStart := since.UTC().Format("2006-01-02T15:04:05.000")
-	pubEnd := time.Now().UTC().Format("2006-01-02T15:04:05.000")
+	items, _, err := n.pollWindow(ctx, since, apiURL)
+	return items, err
+}
+
+func (n *NVD) pollWindow(ctx context.Context, since time.Time, apiURL string) ([]RawItem, time.Time, error) {
+	now := time.Now().UTC()
+	window, err := n.modifiedWindow(ctx, apiURL, since.UTC(), now)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	items, err := n.pollRange(ctx, apiURL, since.UTC(), window)
+	through := window.end
+	if overlap := now.Add(-nvdIndexOverlap); through.After(overlap) {
+		through = overlap
+	}
+	return items, through, err
+}
+
+func (n *NVD) pollRange(ctx context.Context, apiURL string, since time.Time, window nvdWindow) ([]RawItem, error) {
+	pubStart := since.Format("2006-01-02T15:04:05.000")
+	pubEnd := window.end.Format("2006-01-02T15:04:05.000")
 
 	critical, err := n.pollSeverity(ctx, apiURL, pubStart, pubEnd, "CRITICAL", nvdMaxCritical)
 	if err != nil {
@@ -95,7 +123,11 @@ func (n *NVD) pollFrom(ctx context.Context, since time.Time, apiURL string) ([]R
 		// Non-fatal: keep whatever critical+high already gave us.
 		n.log("awaiting-analysis sweep failed", "error", boundedScraperError(err))
 	}
-	modified, modifiedErr := n.pollModified(ctx, apiURL, pubStart, pubEnd)
+	modified, modifiedErr := n.pollModified(ctx, apiURL, pubStart, pubEnd, window.first)
+	if modifiedErr != nil && window.overflow > 0 && errors.Is(modifiedErr, errNVDModifiedPageLimit) {
+		// The overflow was measured and logged when the window was chosen.
+		modifiedErr = nil
+	}
 
 	// A record can appear in both date windows. Prefer its newest evidence,
 	// rather than letting the publication pass hide a later correction.
@@ -119,30 +151,108 @@ func (n *NVD) pollFrom(ctx context.Context, since time.Time, apiURL string) ([]R
 	return items, nil
 }
 
+// nvdWindow is the part of [since, now] one poll reads. first, when set, is the
+// already-fetched first page of the window's modified records. overflow counts
+// modified records beyond the page budget in a window that cannot be narrowed
+// further; the sweep reads the budget and the poll still moves past it.
+type nvdWindow struct {
+	end      time.Time
+	first    *nvdModifiedPage
+	overflow int
+}
+
+type nvdModifiedPage struct {
+	items []RawItem
+	total int
+}
+
+// nvdMinModifiedWindow bounds narrowing: a window this short that still holds
+// more modified records than the page budget cannot be read completely.
+const nvdMinModifiedWindow = time.Minute
+
+// nvdIndexOverlap is re-read on the next poll near the present, so a record
+// NVD indexes shortly after its modification time is not skipped. Re-reading
+// is harmless: seen revisions are filtered and queued items are keyed by
+// revision.
+const nvdIndexOverlap = 15 * time.Minute
+
+// modifiedWindow chooses the window this poll reads completely. NVD reports a
+// window's modified-record total with every page, so the window is halved,
+// oldest part kept, until that total fits the page budget. The first request
+// fetches a full page, which the sweep reuses when it fits, as it usually
+// does. Later probes only need the total and fetch a single record; they only
+// happen while catching up on a backlog.
+func (n *NVD) modifiedWindow(ctx context.Context, apiURL string, start, end time.Time) (nvdWindow, error) {
+	budget := nvdMaxModifiedPages * nvdModifiedPageSize
+	perPage := nvdModifiedPageSize
+	for {
+		select {
+		case <-ctx.Done():
+			return nvdWindow{}, ctx.Err()
+		case <-time.After(n.rateDelay()):
+		}
+		items, total, err := n.fetchPageMode(ctx, n.modifiedQuery(apiURL, start, end, 0, perPage), true)
+		if err != nil {
+			return nvdWindow{}, fmt.Errorf("NVD modified-record sweep incomplete: %w", err)
+		}
+		span := end.Sub(start)
+		if total <= budget || span <= nvdMinModifiedWindow {
+			window := nvdWindow{end: end}
+			if perPage == nvdModifiedPageSize {
+				window.first = &nvdModifiedPage{items: items, total: total}
+			}
+			if total > budget {
+				// A bulk NVD update can modify more records in one minute than
+				// a poll may read. Read the budget and move on: a cursor stuck
+				// on this minute would stop all NVD ingestion.
+				window.overflow = total - budget
+				n.log("NVD modified records beyond the page budget skipped", "skipped", window.overflow, "window", span.String())
+			}
+			return window, nil
+		}
+		end = start.Add(span / 2)
+		perPage = 1
+	}
+}
+
+func (n *NVD) modifiedQuery(apiURL string, start, end time.Time, startIndex, perPage int) string {
+	return fmt.Sprintf("%s?lastModStartDate=%s&lastModEndDate=%s&resultsPerPage=%d&startIndex=%d", apiURL,
+		start.Format("2006-01-02T15:04:05.000"), end.Format("2006-01-02T15:04:05.000"), perPage, startIndex)
+}
+
 // pollModified uses modification dates without a publication-date restriction:
 // a correction to a years-old CVE still belongs in this polling window. The
 // same score filter as normal ingestion includes secondary-scored records.
-func (n *NVD) pollModified(ctx context.Context, apiURL, start, end string) ([]RawItem, error) {
+func (n *NVD) pollModified(ctx context.Context, apiURL, start, end string, first *nvdModifiedPage) ([]RawItem, error) {
 	var items []RawItem
 	for page := range nvdMaxModifiedPages {
-		select {
-		case <-ctx.Done():
-			return items, ctx.Err()
-		case <-time.After(n.rateDelay()):
-		}
 		startIndex := page * nvdModifiedPageSize
-		query := fmt.Sprintf("%s?lastModStartDate=%s&lastModEndDate=%s&resultsPerPage=%d&startIndex=%d", apiURL, start, end, nvdModifiedPageSize, startIndex)
-		batch, total, err := n.fetchPageMode(ctx, query, true)
-		if err != nil {
-			return items, err
+		var batch []RawItem
+		var total int
+		if page == 0 && first != nil {
+			batch, total = first.items, first.total
+		} else {
+			select {
+			case <-ctx.Done():
+				return items, ctx.Err()
+			case <-time.After(n.rateDelay()):
+			}
+			query := fmt.Sprintf("%s?lastModStartDate=%s&lastModEndDate=%s&resultsPerPage=%d&startIndex=%d", apiURL, start, end, nvdModifiedPageSize, startIndex)
+			var err error
+			batch, total, err = n.fetchPageMode(ctx, query, true)
+			if err != nil {
+				return items, err
+			}
 		}
 		items = append(items, batch...)
 		if startIndex+nvdModifiedPageSize >= total {
 			return items, nil
 		}
 	}
-	return items, fmt.Errorf("modified-record page limit (%d) reached", nvdMaxModifiedPages)
+	return items, fmt.Errorf("%w (%d pages)", errNVDModifiedPageLimit, nvdMaxModifiedPages)
 }
+
+var errNVDModifiedPageLimit = errors.New("modified-record page limit reached")
 
 // pollAwaitingAnalysis reads every non-rejected CVE published in the
 // window. NVD API 2.0 has no filter for vuln status "Awaiting Analysis", so

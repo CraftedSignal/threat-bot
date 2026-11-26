@@ -26,6 +26,14 @@ type streamWindow struct {
 	Watermark time.Time
 }
 
+// windowedPoller is a polled source that can read less than [since, now] in
+// one poll, for example when a backlog exceeds its page budget. through is the
+// end of the window it read completely: the cursor advances to it, never past
+// it, even when an item's own timestamps are later.
+type windowedPoller interface {
+	PollThrough(ctx context.Context, since time.Time) (items []RawItem, through time.Time, err error)
+}
+
 // ItemFetcher is implemented by scrapers that can fetch specific items by
 // source ID. `threat-bot sources replay` uses it for sources whose polls are
 // capped and so cannot replay an older window.

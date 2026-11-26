@@ -34,6 +34,7 @@ type runnerStore interface {
 	SaveScraperState(string, time.Time, string) error
 	HasIngestionCandidate(string, string) (bool, error)
 	CommitIngestion(string, time.Time, []storage.IngestionCandidate) error
+	CommitPolledIngestion(string, time.Time, string, []storage.IngestionCandidate) error
 	NextIngestionCandidates(int) ([]storage.IngestionCandidate, error)
 }
 
@@ -198,6 +199,7 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 			r.logger.Info("polling source", "source", s.Name(), "since", since)
 			var items []RawItem
 			var window streamWindow
+			var through time.Time
 			stream, durable := s.(streamPoller)
 			if durable {
 				window, err = stream.PollWindow(ctx, since, func(item RawItem) (bool, error) {
@@ -222,6 +224,8 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 					failState("durable handoff", persistErr)
 					return
 				}
+			} else if windowed, ok := s.(windowedPoller); ok {
+				items, through, err = windowed.PollThrough(ctx, since)
 			} else {
 				items, err = s.Poll(ctx, since)
 			}
@@ -303,35 +307,43 @@ func (r *Runner) PollAll(ctx context.Context) ([]RawItem, error) {
 				}
 			}
 
-			// Only advance the poll timestamp if every fetched item has been
-			// seen (processed) before.  When there are new/unseen items we
-			// keep the old timestamp so that a subsequent poll re-fetches them
-			// if processing fails downstream. Equally important: a poll that
-			// returned zero items at all (network glitch, transient parse
-			// failure, source reformat, etc.) must NOT advance the state for
-			// a brand-new source — otherwise the initial-lookback window is
-			// burned and the source skips its entire backlog forever. Only
-			// advance when we actually fetched something AND nothing was new.
-			if len(items) > 0 && len(newItems) == 0 {
-				boundary := itemFreshness(items[0])
-				cursor := items[0].SourceID
-				for _, item := range items[1:] {
-					if fresh := itemFreshness(item); fresh.After(boundary) {
-						boundary = fresh
-						cursor = item.SourceID
-					}
-				}
-				if boundary.IsZero() || boundary.After(pollNow) {
-					boundary = pollNow
-				}
+			// A successful poll acknowledges what it read. Unprocessed items are
+			// queued durably in the same transaction, and the queue keeps them
+			// until they are processed or superseded. Items held for review can
+			// take days; if they pinned the cursor, every poll would re-read an
+			// ever-growing window until a page cap failed it outright.
+			//
+			// A poll that returned zero items (network glitch, transient parse
+			// failure, source reformat, etc.) must NOT advance the state for a
+			// brand-new source — otherwise the initial-lookback window is burned
+			// and the source skips its entire backlog forever. A windowed source
+			// instead reports the window it read completely, empty or not.
+			if len(items) > 0 || !through.IsZero() {
+				boundary, cursor := pollBoundary(items, through, pollNow)
 				// Replaying a cached representation cannot move a checkpoint
 				// backwards. Repair legacy future state to the current poll.
 				if state != nil && !state.LastPoll.After(pollNow) && boundary.Before(state.LastPoll) {
 					boundary, cursor = state.LastPoll, state.Cursor
 				}
-				if err := r.db.SaveScraperState(s.Name(), boundary, cursor); err != nil {
-					failState("saving checkpoint", err)
-					return
+				if len(newItems) == 0 {
+					if err := r.db.SaveScraperState(s.Name(), boundary, cursor); err != nil {
+						failState("saving checkpoint", err)
+						return
+					}
+				} else {
+					candidates, err := ingestionCandidates(newItems)
+					if err == nil {
+						err = r.db.CommitPolledIngestion(s.Name(), boundary, cursor, candidates)
+					}
+					if err != nil {
+						if !errors.Is(err, storage.ErrIngestionBackpressure) {
+							failState("durable handoff", err)
+							return
+						}
+						// A full queue keeps the cursor, so the next poll re-reads
+						// these items; they are still processed directly below.
+						r.logger.Warn("intake full; retaining source cursor", "source", s.Name(), "new", len(newItems))
+					}
 				}
 			}
 			entry.lastPoll = time.Now()
@@ -493,4 +505,43 @@ func boundedScraperError(err error) string {
 		return "upstream timeout"
 	}
 	return "source operation failed (details redacted)"
+}
+
+// pollBoundary is how far a successful poll read its source. A windowed source
+// reports it; otherwise it is the newest item's freshness. Neither is later
+// than the poll itself.
+func pollBoundary(items []RawItem, through, pollNow time.Time) (time.Time, string) {
+	var boundary time.Time
+	cursor := ""
+	for _, item := range items {
+		fresh := itemFreshness(item)
+		if !through.IsZero() && fresh.After(through) {
+			continue
+		}
+		if cursor == "" || fresh.After(boundary) {
+			boundary, cursor = fresh, item.SourceID
+		}
+	}
+	if !through.IsZero() {
+		boundary = through
+	}
+	if boundary.IsZero() || boundary.After(pollNow) {
+		boundary = pollNow
+	}
+	return boundary, cursor
+}
+
+// ingestionCandidates serializes polled items for the durable intake queue.
+// Every item must be queued before the cursor may pass it.
+func ingestionCandidates(items []RawItem) ([]storage.IngestionCandidate, error) {
+	candidates := make([]storage.IngestionCandidate, 0, len(items))
+	for _, item := range items {
+		item.Revision = item.ContentRevision()
+		payload, err := json.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("encoding %s for intake: %w", item.SourceID, err)
+		}
+		candidates = append(candidates, storage.IngestionCandidate{SourceID: item.SourceID, Source: item.Source, Revision: item.Revision, Payload: string(payload)})
+	}
+	return candidates, nil
 }

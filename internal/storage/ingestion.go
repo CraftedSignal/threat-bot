@@ -50,13 +50,58 @@ func (d *DB) CommitIngestion(source string, watermark time.Time, candidates []In
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = queueIngestionCandidates(tx, candidates); err != nil {
+		return err
+	}
+	if !watermark.IsZero() {
+		var old scraperLastPoll
+		err = tx.QueryRow(`SELECT last_poll FROM scraper_state WHERE source=?`, source).Scan(&old)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == sql.ErrNoRows || watermark.After(time.Time(old)) {
+			if _, err = tx.Exec(`INSERT INTO scraper_state(source,last_poll,cursor) VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET last_poll=excluded.last_poll,cursor=excluded.cursor`, source, watermark.UTC(), fmt.Sprint(watermark.UnixMicro())); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// CommitPolledIngestion queues a polled source's unprocessed items and records
+// how far the source was read, in one transaction. The queue keeps each item
+// until it is processed or superseded, so the cursor can move past work that is
+// still held without losing it. The state is written exactly as
+// SaveScraperState writes it; callers keep their cursor from moving backwards.
+func (d *DB) CommitPolledIngestion(source string, lastPoll time.Time, cursor string, candidates []IngestionCandidate) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = queueIngestionCandidates(tx, candidates); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(
+		`INSERT INTO scraper_state (source, last_poll, cursor) VALUES (?, ?, ?)
+		 ON CONFLICT(source) DO UPDATE SET last_poll = excluded.last_poll, cursor = excluded.cursor`,
+		source, lastPoll, cursor,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// queueIngestionCandidates inserts candidates not yet queued. Candidates are
+// immutable, so a retried insertion is idempotent.
+func queueIngestionCandidates(tx *sql.Tx, candidates []IngestionCandidate) error {
 	var size int64
-	if err = tx.QueryRow(`SELECT COALESCE(SUM(payload_bytes),0) FROM ingestion_candidates`).Scan(&size); err != nil {
+	if err := tx.QueryRow(`SELECT COALESCE(SUM(payload_bytes),0) FROM ingestion_candidates`).Scan(&size); err != nil {
 		return err
 	}
 	for _, c := range candidates {
 		var exists int
-		err = tx.QueryRow(`SELECT 1 FROM ingestion_candidates WHERE source_id=? AND revision=?`, c.SourceID, c.Revision).Scan(&exists)
+		err := tx.QueryRow(`SELECT 1 FROM ingestion_candidates WHERE source_id=? AND revision=?`, c.SourceID, c.Revision).Scan(&exists)
 		if err == nil {
 			continue
 		}
@@ -73,19 +118,7 @@ func (d *DB) CommitIngestion(source string, watermark time.Time, candidates []In
 		}
 		size += int64(len(c.Payload))
 	}
-	if !watermark.IsZero() {
-		var old scraperLastPoll
-		err = tx.QueryRow(`SELECT last_poll FROM scraper_state WHERE source=?`, source).Scan(&old)
-		if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		if err == sql.ErrNoRows || watermark.After(time.Time(old)) {
-			if _, err = tx.Exec(`INSERT INTO scraper_state(source,last_poll,cursor) VALUES(?,?,?) ON CONFLICT(source) DO UPDATE SET last_poll=excluded.last_poll,cursor=excluded.cursor`, source, watermark.UTC(), fmt.Sprint(watermark.UnixMicro())); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
+	return nil
 }
 
 // NextIngestionCandidates rotates bounded delivery by the last service time,

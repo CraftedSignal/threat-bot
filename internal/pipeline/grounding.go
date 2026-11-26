@@ -122,7 +122,9 @@ Check substantive claims in title, summary, content, CVEs, IOCs, affected assets
 
 The severity field is an operational urgency label, not a quoted claim: do not flag it for being absent from the source, but do flag it when it clearly overstates the impact the source describes. Publication IDs, slugs, timestamps, source URLs, QA status, and source/priority assessments are generated metadata, not claims from the article. A recommendation can be a clear operational response to a sourced fact even when the source does not use the same imperative wording. Do not excuse invented attack paths, affected versions, fixed versions, exploitation, or observed impact.
 
-` + exploitationStatesDefinition + ` Flag confirmed_active only when the source does not report attacks actually exploiting the vulnerability or attempts to exploit it. Flag not_observed only when the source reports attacks actually exploiting the vulnerability or attempts to exploit it. A vendor saying it is not aware of malicious exploitation supports not_observed within that vendor's stated scope; it does not assert that exploitation is impossible or that global monitoring found none. Do not flag a source-supported exploitation status merely because the source uses different wording.`
+` + exploitationStatesDefinition + ` Flag confirmed_active only when the source does not report attacks actually exploiting the vulnerability or attempts to exploit it. Flag not_observed only when the source reports attacks actually exploiting the vulnerability or attempts to exploit it. A vendor saying it is not aware of malicious exploitation supports not_observed within that vendor's stated scope; it does not assert that exploitation is impossible or that global monitoring found none. Do not flag a source-supported exploitation status merely because the source uses different wording.
+
+` + releaseBoundRemediationRule
 
 const groundingSystem = groundingFactSystem + `
 
@@ -381,7 +383,7 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 
 // groundingRepairSystemPrompt is the repair call's system prompt. Rules in the
 // revised brief use the same structured Sigma form as the original answer.
-const groundingRepairSystemPrompt = "Revise the threat brief to contain only claims supported by the supplied source and restore missing source-supported facts that change applicability or remediation. Do not invent unspecified versions, roles, dependencies, impact, exploitation or detectors; preserve canonical identity and explicit uncertainty.\n\n" + sigmaStructureGuidance
+const groundingRepairSystemPrompt = "Revise the threat brief to contain only claims supported by the supplied source and restore missing source-supported facts that change applicability or remediation. Do not invent unspecified versions, roles, dependencies, impact, exploitation or detectors; preserve canonical identity and explicit uncertainty.\n\n" + releaseBoundRemediationRule + "\n\n" + sigmaStructureGuidance
 
 // Repair asks the model to remove unsupported claims once, using the same
 // source material the checker saw. The caller must validate and re-check the

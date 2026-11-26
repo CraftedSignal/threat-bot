@@ -684,6 +684,12 @@ func (record cnaSourceRecord) sourceFacts(id string) ([]cnaSourceFact, string) {
 	}
 	if !hasRemediation {
 		gap = "unknown: usable remediation is not present in retained CNA evidence; this does not establish the absence of a fixed release"
+		if recordHasReleaseBoundFix(facts) {
+			// Exclusive release bounds derive fixed releases under
+			// releaseBoundRemediationRule; calling remediation absent would
+			// contradict the derived evidence the checker also receives.
+			gap = "no solution text in retained CNA evidence; fixed releases are only those derived from exclusive affected bounds under release-bound remediation, and remediation for other ranges is unknown"
+		}
 	}
 	if truncated {
 		gap += "; CNA evidence size limit omitted additional fields; completeness requires confirmation"

@@ -31,6 +31,8 @@ VERIFIED PRIMARY EVIDENCE: When supplied, incorporate material affected/fixed ve
 
 UNRESOLVED PRIMARY VERSION SCOPE: When the verified evidence includes an "Applicability range limitation", keep that limitation explicit in source_assessment.gaps. Git commit bounds and "original_commit_for_fix" markers are not released product versions. Do not translate them into affected or fixed releases. Use a literal release range only when another supplied source states it.
 
+` + releaseBoundRemediationRule + `
+
 FIELD GUIDE (what each schema field holds; the YAML notation is for reading only, and Sigma detections and test data take the structured form described under SIGMA STRUCTURE):
 
 id: "brief-YYYY-MM-DD-short-slug"
@@ -546,7 +548,7 @@ func structuredAdvisoryFacts(item scraper.RawItem) string {
 
 // structuredAdvisoryInstruction tells the generator how to use the facts. It
 // is a generation instruction, not source material, so grounding never sees it.
-const structuredAdvisoryInstruction = "\n\nThese structured advisory facts are authoritative. Copy package names, affected and patched version ranges, CPE URIs, and CVSS from them exactly; do not infer or adjust ranges from the prose. Keep each range bound to its named product and retain separate release branches. Preserve every CPE component, including release-candidate updates and architectures. An affected upper bound alone does not establish a fixed release."
+const structuredAdvisoryInstruction = "\n\nThese structured advisory facts are authoritative. Copy package names, affected and patched version ranges, CPE URIs, and CVSS from them exactly; do not infer or adjust ranges from the prose. Keep each range bound to its named product and retain separate release branches. Preserve every CPE component, including release-candidate updates and architectures. An exclusive upper bound (versionEndExcluding, \"< X\") makes X the fixed release of that range; an inclusive bound (versionEndIncluding, \"<= X\") does not establish a fixed release."
 
 // structuredAdvisoryData is the data block of structuredAdvisoryFacts: the
 // facts alone, which grounding may treat as source material.

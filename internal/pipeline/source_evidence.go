@@ -136,6 +136,9 @@ func (p *Pipeline) verifiedPrimaryFacts(ids []string) (string, primaryRecordFact
 		// source facts. A dense CVE record must not bypass the bounded input size.
 		add(strings.TrimSuffix(guidance, "\n"))
 	}
+	if guidance := releaseBoundRemediationGuidance(facts); guidance != "" {
+		add(strings.TrimSuffix(guidance, "\n"))
+	}
 	return "Verified primary CVE evidence. Keep each fact attached to its CVE and product; a record-wide solution is not a fix for every product. Resolve conflicts through explicit uncertainty or editorial review.\n" + evidence.String(), facts
 }
 

@@ -561,7 +561,9 @@ type patchVersionHint struct {
 	VulnerableRange string
 	FixedVersion    string
 	// BeforeVersions lists every version named by a "before X, Y and Z" phrase,
-	// in source order. A boundary alone does not establish a fixed release.
+	// in source order. FixedVersion records only an explicitly stated fix, so
+	// deterministic scope never resolves conflicting clauses on its own; the
+	// model applies releaseBoundRemediationRule to bounds such as these.
 	BeforeVersions []string
 }
 

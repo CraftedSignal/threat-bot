@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Apply one remediation rule across assembly, grounding and repair: an exclusive upper release bound such as "before X" makes X the fixed release, so "upgrade to X or later" is supported. Inclusive and commit bounds still establish no fix. Previously the checker rejected that advice and, after repair, demanded it again, which quarantined most new CVE briefs that failed grounding.
 - Stop paying for rebuilds of briefs from revisions of their own source. A rebuilt narrative that differs from the canonical one is always held for review, so revisions with unchanged source text now complete without work and other revisions are held with their evidence before any model call; batch prefetch no longer plans work for them.
 - Keep processing checkpoints when a built-in source confidence default is added or changed. The processing policy embedded the whole default table, so adding a source discarded every pending candidate and re-paid their grounding, repair and recheck calls.
 - Pin fetched articles, vendor advisories and social context to the source input they were fetched for. Pending candidates and editorial holds no longer re-fetch changing pages every poll, which discarded paid candidates, reset grounding budgets and rebuilt held briefs repeatedly.

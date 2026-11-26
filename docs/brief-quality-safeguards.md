@@ -74,6 +74,16 @@ fix or transfer another product's remediation. Minor background omissions remain
 advisory. Partial merge claims and added hunt leads use a claims-only check, so
 they do not acquire full-brief completeness requirements.
 
+Assembly, grounding and repair share one remediation rule. An exclusive upper
+release bound ("before X", "< X", NVD versionEndExcluding, a CVE record range
+with lessThan X) makes X the product's fixed release for that range, so "upgrade
+to X or later" is supported; a list of bounds gives one fixed release per
+branch. Inclusive bounds ("through X", "<= X"), Git commit or
+original_commit_for_fix bounds, and sources that say no fix exists establish no
+fixed release. The verified CVE evidence states each fixed release derived from
+an exclusive record bound; that machine-derived line is never accepted as a
+quoted source fact.
+
 Verified source-listed CVEs can carry supplementary CVE Program evidence into
 grounding. The optional lookup has a three-second deadline, shares in-flight
 requests, and retains at most 80 facts and 12,000 encoded bytes per record.

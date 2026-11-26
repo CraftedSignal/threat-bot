@@ -140,6 +140,31 @@ func TestRecordProductsLeaveUnrenderableEntriesToTheScopeGap(t *testing.T) {
 	}
 }
 
+// Red Hat records state a fixed rpm per stream as an exception to an affected
+// default. affected_products cannot carry the package with that version (the
+// product scope parser accepts no package qualifier), so these streams are not
+// added and the brief product keeps the explicit applicability gap.
+func TestRecordProductsKeepRedHatRPMStreamsOnTheScopeGap(t *testing.T) {
+	facts := primaryRecordFacts{Included: []cnaSourceFact{
+		affectedFact("CVE-2026-16118", "Red Hat Enterprise Linux 10", `{"vendor":"Red Hat","product":"Red Hat Enterprise Linux 10","packageName":"glib2","defaultStatus":"affected","versions":[{"version":"0:2.80.4-12.el10_2.22","lessThan":"*","versionType":"rpm","status":"unaffected"}]}`),
+		affectedFact("CVE-2026-16118", "Red Hat Enterprise Linux 8", `{"vendor":"Red Hat","product":"Red Hat Enterprise Linux 8","packageName":"glib2","defaultStatus":"affected","versions":[{"version":"0:2.56.4-1.el8_10","lessThan":"*","versionType":"rpm","status":"unaffected"}]}`),
+		affectedFact("CVE-2026-16118", "Red Hat Enterprise Linux 7", `{"vendor":"Red Hat","product":"Red Hat Enterprise Linux 7","packageName":"glib2","defaultStatus":"affected"}`),
+	}}
+	raw := injectAffectedRanges("affected_products:\n  - Red Hat Enterprise Linux 8\n", scraper.RawItem{Source: "nvd"}, facts)
+	if got := renderedProducts(t, raw); !slices.Equal(got, []string{"Red Hat Enterprise Linux 8"}) {
+		t.Fatalf("rpm streams were rendered or added: %q", got)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	assessment, _ := doc["source_assessment"].(map[string]any)
+	gaps := yamlStringList(assessment["gaps"])
+	if len(gaps) != 1 || !strings.HasPrefix(gaps[0], "CVE-2026-16118 / Red Hat Enterprise Linux 8: defaultStatus=affected with version exceptions") {
+		t.Fatalf("source_assessment.gaps = %q", gaps)
+	}
+}
+
 func TestRecordProductsNeverReaddRepairRejectedScope(t *testing.T) {
 	facts := primaryRecordFacts{Included: recordWindowsNTLM}
 	injected := renderedProducts(t, injectAffectedRanges(ntlmBrief, scraper.RawItem{Source: "nvd"}, facts))

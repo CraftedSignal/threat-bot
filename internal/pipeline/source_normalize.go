@@ -216,18 +216,10 @@ func structuredAdvisorySeverity(item scraper.RawItem) string {
 		return "low"
 	}
 	score, err := strconv.ParseFloat(strings.TrimSpace(item.Metadata["cvss"]), 64)
-	if err != nil || score <= 0 || score > 10 {
+	if err != nil {
 		return ""
 	}
-	switch {
-	case score >= 9.0:
-		return "critical"
-	case score >= 7.0:
-		return "high"
-	case score >= 4.0:
-		return "medium"
-	}
-	return "low"
+	return cvssBand(score)
 }
 
 // setBriefSeverity replaces the top-level severity label. A missing label and

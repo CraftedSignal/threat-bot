@@ -86,15 +86,27 @@ identity. An explicit rejected/reserved primary identity requires review.
 
 Stable source IDs and evidence revisions are separate. Synthetic publication
 clocks do not change a revision; real upstream modification dates can trigger a
-refresh. RSS/Atom updated dates and bounded NVD modified-record sweeps include
-older corrections, downgraded records and withdrawals. Such low/rejected NVD
-records can update existing coverage but do not create new low-value briefs.
+refresh. RSS/Atom updated dates and NVD's modified-record feed include older
+corrections, downgraded records and withdrawals. A successful poll advances the
+source cursor and queues unprocessed items in the same transaction, so held work
+never holds the cursor back. An NVD backlog larger than the page budget is read
+oldest first in windows that fit. Such low/rejected NVD records can update
+existing coverage but do not create new low-value briefs.
 
 Validated candidates, extraction provenance and the canonical rebuild target
 survive restart. Model IDs, prompts, schemas, quality configuration and policy
-versions invalidate incompatible work. Retries refresh fetched evidence before
-reusing it. Fetch failures retain the prior candidate and budget. A timestamp-only
-change reuses unchanged evidence; completed evidence consumes no extra model call.
+versions invalidate incompatible work. Fetched articles, vendor advisories and
+social context are pinned to the source input they were fetched for once a
+refresh completes: retries and editorial holds reuse that evidence instead of
+re-fetching pages whose chrome, counters or availability change between polls.
+A changed source input, policy or incomplete earlier refresh fetches again.
+Fetch failures retain the prior candidate and budget. A timestamp-only change
+reuses unchanged evidence; completed evidence consumes no extra model call.
+
+A recent critical disclosure from an authoritative source that scores below the
+quality threshold is retained for up to 72 hours. It is re-scored behind a
+durable deadline that starts at the retry backoff and doubles up to 12 hours,
+rather than on every intake cycle.
 
 Grounding attempts, including provider errors, consume a persistent bounded
 budget. The default is five passes with 15 minutes between failed passes. Retry

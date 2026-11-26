@@ -21,7 +21,7 @@ Use SQLite's supported online backup mechanisms if downtime is unacceptable. Cop
 
 The runner exposes `/healthz` and `/readyz` on port **8086**, listening on all interfaces. Health reflects poll-loop state; readiness reflects model health. Neither proves that all sources are current or that every feed artifact is published. The server uses bounded HTTP timeouts. Restrict probe reachability using the host/container network; do not expose it as a public management endpoint.
 
-Logs go to the process output. Review provider health, source errors, repeated grounding failures, publication failures, and outbox recovery. When `monitoring.public_feed_url` is configured, freshness checks can detect delayed website updates; an empty URL disables those requests. Redact logs before sharing even though sensitive-error controls exist.
+Logs go to the process output. Review provider health, source errors, repeated grounding failures, publication failures, and outbox recovery. A source is reported unhealthy after four consecutive failed polls; when every failure in the streak is a transient upstream outage (HTTP 5xx, 408 or 429, timeouts or dropped connections), the outage must also have lasted at least six hours or three poll intervals, whichever is longer. Blocks (403), certificate failures and scraper errors keep the immediate rule. When `monitoring.public_feed_url` is configured, freshness checks can detect delayed website updates; an empty URL disables those requests. Redact logs before sharing even though sensitive-error controls exist.
 
 ## Containers
 

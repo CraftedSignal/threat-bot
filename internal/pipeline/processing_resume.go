@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -46,6 +47,14 @@ type processingCandidate struct {
 	ClaimAssessment        *processingClaimAssessment
 	RefreshRetries         map[string]time.Time
 	RefreshRetryAttempts   map[string]int
+	// PinnedInput is the evidence revision of the source input for which Item
+	// holds a complete refresh. That evidence is reused until the source input
+	// itself changes. Empty means incomplete or written before pinning existed.
+	PinnedInput string `yaml:",omitempty"`
+	// QualityRetry marks a recent critical disclosure retained after a low
+	// quality score. It carries no paid work; it only holds a retry deadline.
+	QualityRetry         bool `yaml:",omitempty"`
+	QualityRetryAttempts int  `yaml:",omitempty"`
 }
 
 // trackGroundingIssueCycle records stable identities for rejected grounding
@@ -157,6 +166,90 @@ func (p *Pipeline) processingInputKey(item scraper.RawItem) string {
 	// Stable feed revision locates saved work before article enrichment.
 	raw := scraper.RawItem{Revision: item.ContentRevision()}
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(p.processingKey(raw)+raw.Revision)))
+}
+
+// pinnedSourceEvidence returns the evidence saved with this exact source input.
+// Fetched articles, vendor advisories and social context are part of the
+// candidate built from them. Re-fetching them for unchanged input only adds
+// noise: rotating page chrome, changing reply counts or a transient fetch
+// failure. Each such difference used to discard the paid candidate, restart
+// its grounding budget and, for a held rebuild, buy the same editorial hold
+// again on every poll. A new source revision or processing policy refreshes.
+func (p *Pipeline) pinnedSourceEvidence(item scraper.RawItem) (scraper.RawItem, bool) {
+	if p.db == nil {
+		return item, false
+	}
+	cp, err := p.db.GetProcessingCheckpoint(item.SourceID)
+	if err != nil || cp == nil {
+		return item, false
+	}
+	var state processingCandidate
+	if err := yaml.Unmarshal([]byte(cp.Payload), &state); err != nil {
+		return item, false
+	}
+	// The comparison ignores delivery clocks: a feed that only bumps its
+	// modification time has supplied no new evidence. Discovery claims and
+	// quality retries refresh by design; incomplete evidence is retried
+	// through the source-refresh backoff.
+	if state.PinnedInput == "" || state.PinnedInput != item.EvidenceRevision() || state.QualityRetry ||
+		state.Stage != "" || state.ClaimAssessment != nil || state.PolicyKey != p.processingPolicyKey() ||
+		state.Item.SourceID != item.SourceID {
+		return item, false
+	}
+	pinned := state.Item
+	pinned.Revision, pinned.UpdatedAt = item.ContentRevision(), item.UpdatedAt
+	// Serve only evidence identical to what the candidate was built from.
+	// YAML decodes nil maps and slices as empty ones, which changes the
+	// evidence hash; restore them before comparing. Any other difference
+	// falls back to a normal refresh.
+	if state.EvidenceKey == "" {
+		return item, false
+	}
+	if p.processingKey(pinned) != state.EvidenceKey {
+		nilEmptyCollections(reflect.ValueOf(&pinned).Elem())
+		if p.processingKey(pinned) != state.EvidenceKey {
+			return item, false
+		}
+	}
+	return pinned, true
+}
+
+// nilEmptyCollections resets empty maps and slices to nil throughout v.
+func nilEmptyCollections(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		if !v.IsNil() {
+			nilEmptyCollections(v.Elem())
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if field := v.Field(i); field.CanSet() {
+				nilEmptyCollections(field)
+			}
+		}
+	case reflect.Map, reflect.Slice:
+		if v.Len() == 0 && !v.IsNil() && v.CanSet() {
+			v.Set(reflect.Zero(v.Type()))
+			return
+		}
+		if v.Kind() == reflect.Slice {
+			for i := range v.Len() {
+				nilEmptyCollections(v.Index(i))
+			}
+		}
+	}
+}
+
+// pinnedInputFor returns the source input evidence this cycle refreshed item
+// from completely, or "" when the refresh failed or is unknown. Without a cycle
+// memo the candidate keeps the previous refresh-on-resume behavior.
+func (p *Pipeline) pinnedInputFor(ctx context.Context, item scraper.RawItem) string {
+	memo, _ := ctx.Value(sourceRefreshMemoKey{}).(sourceRefreshMemo)
+	result, ok := memo[item.SourceID+"\x00"+item.ContentRevision()]
+	if !ok || result.err != nil {
+		return ""
+	}
+	return result.input
 }
 
 func (p *Pipeline) saveCandidate(key string, state processingCandidate, retry time.Time) error {

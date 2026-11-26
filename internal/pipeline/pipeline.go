@@ -607,9 +607,18 @@ func (p *Pipeline) refreshSourceEvidence(ctx context.Context, item scraper.RawIt
 	if result, ok := memo[key]; ok {
 		return result.item, result.err
 	}
+	input := item.EvidenceRevision()
+	if pinned, ok := p.pinnedSourceEvidence(item); ok {
+		if memo != nil {
+			// Prefetch never plans checkpointed items, so the pinned item is
+			// also the correct article base for any other reader.
+			memo[key] = sourceRefreshResult{item: pinned, articleBase: pinned, input: input}
+		}
+		return pinned, nil
+	}
 	refreshed, articleBase, err := p.refreshSourceEvidenceUncached(ctx, item)
 	if memo != nil {
-		memo[key] = sourceRefreshResult{item: refreshed, articleBase: articleBase, err: err}
+		memo[key] = sourceRefreshResult{item: refreshed, articleBase: articleBase, err: err, input: input}
 	}
 	return refreshed, err
 }

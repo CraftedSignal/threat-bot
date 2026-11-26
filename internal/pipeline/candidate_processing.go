@@ -133,7 +133,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 	// affected version ranges and the advisory severity. This runs before the
 	// first grounding check so the checker sees the final values.
 	cleanedYAML = p.injectSourceRanges(cleanedYAML, item)
-	cleanedYAML = normalizeDetectionSeverity(cleanedYAML, item)
+	cleanedYAML = p.normalizeSeverity(cleanedYAML, item)
 
 	state.BriefYAML = cleanedYAML
 	if err := p.saveCandidate(key, state, time.Now().Add(p.retryBackoff)); err != nil {
@@ -215,7 +215,7 @@ func (p *Pipeline) processCandidate(ctx context.Context, key string, state proce
 		cleanedYAML, _ = p.iocVerifier.Verify(cleanedYAML)
 		cleanedYAML, _ = p.cveVerifier.Verify(ctx, cleanedYAML)
 		cleanedYAML = p.injectSourceRanges(cleanedYAML, item)
-		cleanedYAML = normalizeDetectionSeverity(cleanedYAML, item)
+		cleanedYAML = p.normalizeSeverity(cleanedYAML, item)
 		state.BriefYAML, state.Issues = cleanedYAML, nil
 		state.GroundingRecheckFailed = false
 		if err := p.saveCandidate(key, state, time.Now().Add(retryDelay)); err != nil {

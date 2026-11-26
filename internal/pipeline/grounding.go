@@ -49,6 +49,22 @@ func (g *GroundingChecker) WithLogger(logger *slog.Logger) *GroundingChecker {
 type GroundingResult struct {
 	Grounded bool     `json:"grounded"`
 	Issues   []string `json:"issues"`
+	// Findings are the checker's blocking findings as reported, in the order
+	// of their Issues entries. Repair and pre-recheck verification need the
+	// quoted brief text and field, which the flattened Issues strings cannot
+	// carry reliably. Deterministic identity issues have no finding, and a
+	// result rebuilt from saved Issues carries none.
+	Findings []GroundingFinding `json:"-"`
+}
+
+// GroundingFinding is one blocking checker finding. SourceQuote is the
+// resolved, validated source text for material omissions.
+type GroundingFinding struct {
+	Kind, Field, Subject, BriefQuote, SourceQuote, Reason string
+}
+
+func newGroundingFinding(issue groundingIssue) GroundingFinding {
+	return GroundingFinding{Kind: issue.Kind, Field: issue.Field, Subject: issue.Subject, BriefQuote: issue.BriefQuote, SourceQuote: issue.SourceQuote, Reason: issue.Reason}
 }
 
 // Issue kinds the checker can report.
@@ -355,7 +371,11 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 			if err := validateMaterialOmission(issue, source, briefYAML); err != nil {
 				return nil, fmt.Errorf("grounding completeness evidence: %w", err)
 			}
+			if g.unsatisfiableVersionOmission(issue, source, briefYAML) {
+				continue
+			}
 			result.Issues = append(result.Issues, fmt.Sprintf("%s: missing source-supported fact for %s: %s (source: %s)", issue.Field, issue.Subject, issue.Reason, issue.SourceQuote))
+			result.Findings = append(result.Findings, newGroundingFinding(issue))
 			continue
 		}
 		if nonFactualRatingIssue(issue, briefYAML) {
@@ -371,14 +391,41 @@ Assess the supplied YAML according to the system instructions, with verbatim quo
 		// when the quote does not match the brief: the model sometimes quotes
 		// the source instead, and dropping those would publish the claim.
 		quote := normalizeForQuote(issue.BriefQuote)
+		finding := newGroundingFinding(issue)
 		if quote != "" && strings.Contains(normalizedBrief, quote) {
 			result.Issues = append(result.Issues, fmt.Sprintf("%s: %s (%s)", issue.Field, issue.Reason, issue.BriefQuote))
 		} else {
+			// An unmatched quote is not brief text: repair and verification
+			// must not treat it as something to delete.
+			finding.BriefQuote = ""
 			result.Issues = append(result.Issues, fmt.Sprintf("%s: %s", issue.Field, issue.Reason))
 		}
+		result.Findings = append(result.Findings, finding)
 	}
 	result.Grounded = len(result.Issues) == 0
 	return result, nil
+}
+
+// unsatisfiableVersionOmission drops a validated material omission that
+// demands a version, range or fixed release no repair can supply, and logs it
+// for audit. Two cases break the checker's own contract: the cited source
+// passage states no version at all, or it is the primary record whose
+// unmappable release scope the brief already records as a machine gap.
+// Omissions about prerequisites, impact or remediation without a version are
+// unaffected, as is a fixed release the release-bound rule derives.
+func (g *GroundingChecker) unsatisfiableVersionOmission(issue groundingIssue, source, briefYAML string) bool {
+	if !omissionDemandsVersion(issue) {
+		return false
+	}
+	if !quoteStatesVersion(issue.SourceQuote) {
+		g.logger.Info("material omission dropped: source quote states no version", "field", issue.Field, "subject", issue.Subject, "reason", issue.Reason, "source_quote", issue.SourceQuote)
+		return true
+	}
+	if fact, ok := primaryScopeGapRecorded(issue, source, parseBriefFrontmatter(briefYAML)); ok {
+		g.logger.Info("material omission dropped: primary scope gap already recorded", "field", issue.Field, "subject", issue.Subject, "cve", fact.CVEID, "product", fact.Product, "reason", issue.Reason)
+		return true
+	}
+	return false
 }
 
 // groundingRepairSystemPrompt is the repair call's system prompt. Rules in the

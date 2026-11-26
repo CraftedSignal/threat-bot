@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 )
 
@@ -21,6 +22,33 @@ type SourceHealth struct {
 	pollInterval              time.Duration
 	lastErrorLog              time.Time
 	lastErrorLogFingerprint   string
+	// outageStarted is the first failure of the current error streak.
+	outageStarted time.Time
+	// streakNotTransient records a failure in the streak that is not a
+	// transient upstream outage (a block, certificate or scraper failure).
+	streakNotTransient bool
+}
+
+// upstreamOutageTolerance is how long transient upstream failures (5xx, 408,
+// 429, timeouts, dropped connections) may last before the outage counts as
+// sustained. Short third-party outages recover on their own; retries during
+// them are not an operational fault. Slow sources get several polls' grace.
+func upstreamOutageTolerance(pollInterval time.Duration) time.Duration {
+	return max(6*time.Hour, 3*pollInterval)
+}
+
+// transientUpstreamFailure reports failures that a source normally recovers
+// from without intervention. Blocks (403) and certificate failures persist
+// until someone acts, so they keep the immediate consecutive-error rule.
+func transientUpstreamFailure(err error) bool {
+	if code, ok := upstreamStatus(err); ok {
+		return code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || (code >= 500 && expectedUpstreamStatuses[code])
+	}
+	switch scraperErrorClass(err) {
+	case "network_timeout", "network_eof":
+		return true
+	}
+	return false
 }
 
 // IsHealthy returns true if the source has no concerning indicators.
@@ -30,7 +58,11 @@ type SourceHealth struct {
 // poll.
 func (h SourceHealth) IsHealthy() bool {
 	if h.ConsecutiveErrors > 3 {
-		return false
+		// A streak that includes any other failure may need action: surface it
+		// immediately. A transient upstream outage must also last long enough.
+		if h.streakNotTransient || h.outageStarted.IsZero() || time.Since(h.outageStarted) >= upstreamOutageTolerance(h.pollInterval) {
+			return false
+		}
 	}
 	if h.LastSuccess.IsZero() {
 		return true
@@ -115,6 +147,8 @@ func (r *Runner) recordSuccess(source string, newItems int) {
 	h.LastErrorClass = ""
 	h.lastErrorLogFingerprint = ""
 	h.ConsecutiveErrors = 0
+	h.outageStarted = time.Time{}
+	h.streakNotTransient = false
 	h.TotalItems += newItems
 
 	if newItems == 0 {
@@ -156,6 +190,11 @@ func (r *Runner) recordError(source string, err error) (SourceHealth, bool) {
 	h.LastErrorMessage = message
 	h.LastErrorClass = errorClass
 	h.LastErrorExpectedUpstream = isExpectedUpstreamScraperError(err)
+	if h.ConsecutiveErrors == 0 {
+		h.outageStarted = now
+		h.streakNotTransient = false
+	}
+	h.streakNotTransient = h.streakNotTransient || !transientUpstreamFailure(err)
 	h.ConsecutiveErrors++
 
 	r.health[source] = h

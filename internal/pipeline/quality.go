@@ -87,6 +87,31 @@ func retryCriticalQualityRejection(item scraper.RawItem, now time.Time) bool {
 	return strings.Contains(title, "critical") || strings.Contains(title, "compromis") || strings.Contains(title, "emergency")
 }
 
+// Critical retention re-scores at a growing interval within its window.
+const maxCriticalQualityRetryDelay = 12 * time.Hour
+
+func (p *Pipeline) criticalQualityRetryDelay(attempt int) time.Duration {
+	delay := p.retryBackoff
+	for n := 1; n < attempt && delay > 0 && delay < maxCriticalQualityRetryDelay; n++ {
+		delay *= 2
+	}
+	return min(delay, max(p.retryBackoff, maxCriticalQualityRetryDelay))
+}
+
+// retainCriticalDisclosure keeps a recent critical disclosure for a later
+// re-score behind a durable, growing deadline. Re-delivery from the intake
+// queue previously re-fetched and re-scored identical evidence every cycle
+// for the whole retention window.
+func (p *Pipeline) retainCriticalDisclosure(key, attemptID string, item scraper.RawItem, score float64, attempt int) error {
+	delay := p.criticalQualityRetryDelay(attempt)
+	state := processingCandidate{AttemptID: attemptID, Item: item, QualityRetry: true, QualityRetryAttempts: attempt}
+	if err := p.saveCandidate(key, state, time.Now().Add(delay)); err != nil {
+		return fmt.Errorf("saving critical disclosure retry: %w", err)
+	}
+	p.logger.Warn("retaining critical disclosure after low quality score", "source_id", item.SourceID, "score", score, "attempt", attempt, "retry_delay", delay)
+	return nil
+}
+
 type QualityGate struct {
 	client         llm.Client
 	fallbackClient llm.Client

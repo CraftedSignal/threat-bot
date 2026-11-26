@@ -120,7 +120,7 @@ func (p *Pipeline) mergeIntoDraft(ctx context.Context, draftID string, extractio
 		return fmt.Errorf("%w: %w", errMergeRelevanceUnavailable, err)
 	}
 	key := p.processingInputKey(item)
-	state := processingCandidate{Item: item, Extraction: cloneExtraction(extraction), MergeDraftID: draftID, MergeTargetKey: targetKey}
+	state := processingCandidate{Item: item, Extraction: cloneExtraction(extraction), MergeDraftID: draftID, MergeTargetKey: targetKey, PinnedInput: p.pinnedInputFor(ctx, item)}
 	state.AttemptID = llm.CallMetadataFromContext(ctx).AttemptID
 	cp, err := p.db.GetProcessingCheckpoint(item.SourceID)
 	if err != nil {

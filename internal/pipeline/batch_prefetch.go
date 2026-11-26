@@ -21,7 +21,9 @@ const prefetchChunkSize = llm.MaxBatchRequests
 type sourceRefreshMemoKey struct{}
 type sourceRefreshResult struct {
 	item, articleBase scraper.RawItem
-	err               error
+	// input is the evidence revision of the unrefreshed source item.
+	input string
+	err   error
 }
 
 func (p *Pipeline) retainedBatchItems(items []scraper.RawItem) ([]scraper.RawItem, error) {

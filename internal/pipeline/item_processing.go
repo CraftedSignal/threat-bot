@@ -19,6 +19,8 @@ import (
 
 func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resultErr error) {
 	item.Revision = item.ContentRevision()
+	// Evidence of the source input as delivered, before any refresh.
+	inputEvidence := item.EvidenceRevision()
 	attemptID := uuid.NewString()
 	ctx = llm.WithCallMetadata(ctx, llm.CallMetadata{SourceID: item.SourceID, AttemptID: attemptID})
 	key := p.processingInputKey(item)
@@ -33,6 +35,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	workStarted := false
 	var mergeExtraction *ExtractionResult
 	var groundingIssueHistory []string
+	qualityRetryAttempts := 0
 	var staleCheckpoint *storage.ProcessingCheckpoint
 	defer func() {
 		// Keep the previous checkpoint (and its normalized grounding findings)
@@ -75,7 +78,15 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		if state.Stage != "" || state.ClaimAssessment != nil {
 			return p.resumeDiscoveryClaim(ctx, key, item, attemptID, *cp, state)
 		}
-		if state.PolicyKey == p.processingPolicyKey() {
+		if state.QualityRetry {
+			// A retained critical disclosure holds only a deadline. Until it
+			// passes, unchanged input has nothing new to score.
+			if state.PolicyKey == p.processingPolicyKey() && cp.InputKey == key && time.Now().Before(cp.RetryAt) {
+				return nil
+			}
+			qualityRetryAttempts = state.QualityRetryAttempts
+			staleCheckpoint = cp
+		} else if state.PolicyKey == p.processingPolicyKey() {
 			if state.sourceRefreshDeferred(key) {
 				return nil
 			}
@@ -119,6 +130,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 				}
 				state.Item.Revision = item.Revision
 				state.Item.UpdatedAt = item.UpdatedAt
+				state.PinnedInput = inputEvidence
 				if err := p.saveCandidate(key, state, cp.RetryAt); err != nil {
 					return err
 				}
@@ -181,6 +193,10 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	p.logger.Info("processing item", "source_id", item.SourceID, "source", item.Source, "title", item.Title)
 	var sourceRefreshErr error
 	item, sourceRefreshErr = p.refreshSourceEvidence(ctx, item)
+	pinnedInput := ""
+	if sourceRefreshErr == nil {
+		pinnedInput = inputEvidence
+	}
 	if sourceRefreshErr == nil {
 		unchanged, err := p.db.SeenEvidenceMatches(item.SourceID, item.EvidenceRevision())
 		if err != nil {
@@ -192,7 +208,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 		}
 	}
 
-	routing, done, err := p.routePreExtraction(ctx, key, processingCandidate{AttemptID: attemptID, Item: item, Extraction: mergeExtraction})
+	routing, done, err := p.routePreExtraction(ctx, key, processingCandidate{AttemptID: attemptID, Item: item, Extraction: mergeExtraction, PinnedInput: pinnedInput})
 	if done || err != nil {
 		return err
 	}
@@ -204,7 +220,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 	// and are exempt — their custom scrapers guarantee adequate content length.
 	if len(strings.TrimSpace(item.Content)) < 100 && item.SigmaRule == nil && !isExploitTracker(item.Source) {
 		if rebuildDraftID != "" {
-			return p.holdDraftRebuild(key, processingCandidate{AttemptID: attemptID, Item: item, RebuildDraftID: rebuildDraftID}, item.Content, "source correction has insufficient evidence for an automatic rebuild")
+			return p.holdDraftRebuild(key, processingCandidate{AttemptID: attemptID, Item: item, RebuildDraftID: rebuildDraftID, PinnedInput: pinnedInput}, item.Content, "source correction has insufficient evidence for an automatic rebuild")
 		}
 		p.logger.Info("skipping thin content", "source_id", item.SourceID, "len", len(item.Content))
 		if err := p.markSeen(item); err != nil {
@@ -262,11 +278,10 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 
 	if !pass {
 		if rebuildDraftID != "" {
-			return p.holdDraftRebuild(key, processingCandidate{AttemptID: attemptID, Item: item, RebuildDraftID: rebuildDraftID}, item.Content, "source correction did not meet the quality threshold")
+			return p.holdDraftRebuild(key, processingCandidate{AttemptID: attemptID, Item: item, RebuildDraftID: rebuildDraftID, PinnedInput: pinnedInput}, item.Content, "source correction did not meet the quality threshold")
 		}
 		if retryCriticalQualityRejection(item, time.Now()) {
-			p.logger.Warn("retaining critical disclosure after low quality score", "source_id", item.SourceID, "score", score)
-			return nil
+			return p.retainCriticalDisclosure(key, attemptID, item, score, qualityRetryAttempts+1)
 		}
 		if err := p.markSeen(item); err != nil {
 			return fmt.Errorf("recording seen item: %w", err)
@@ -293,7 +308,7 @@ func (p *Pipeline) processItem(ctx context.Context, item scraper.RawItem) (resul
 			p.logger.Warn("extraction failed, continuing without", "source_id", item.SourceID, "error", extractErr)
 		}
 	}
-	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, GroundingFindingPolicy: groundingFindingPolicyVersion, RebuildDraftID: rebuildDraftID}
+	state := processingCandidate{AttemptID: attemptID, Item: item, Extraction: extraction, PreCVEs: preCVEs, Score: score, Confidence: confidence, GroundingIssueHistory: groundingIssueHistory, GroundingFindingPolicy: groundingFindingPolicyVersion, RebuildDraftID: rebuildDraftID, PinnedInput: pinnedInput}
 	return p.finishExtractedItem(ctx, key, state, dedupDecision, dedupEntries)
 }
 

@@ -4,6 +4,9 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Pin fetched articles, vendor advisories and social context to the source input they were fetched for. Pending candidates and editorial holds no longer re-fetch changing pages every poll, which discarded paid candidates, reset grounding budgets and rebuilt held briefs repeatedly.
+- Retain recent critical disclosures rejected by the quality gate behind a durable, doubling deadline instead of re-scoring them on every intake cycle.
+- Report transient upstream outages (5xx, 408, 429, timeouts) as unhealthy only once they persist for six hours or three poll intervals; blocks, certificate failures and scraper errors remain immediate.
 - Merge compatible partial rows for the same CVE before publication, preserving all available metadata while keeping conflicting values under editorial review.
 - Reject roundup briefs that list at least 50 distinct CVEs but title themselves as a single-CVE issue, preventing product-specific narratives from masquerading as the aggregate roundup.
 - Keep source-revision narrative rebuilds within product briefs; rebuilding a roundup or other non-product canonical brief now holds for editorial review instead of replacing its aggregate narrative.

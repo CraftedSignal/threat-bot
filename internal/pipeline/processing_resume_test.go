@@ -275,6 +275,26 @@ func TestChangedEnrichedEvidenceKeepsReplacementCheckpointWithStableInputKey(t *
 		t.Fatalf("initial issue history = %v", oldState.GroundingIssueHistory)
 	}
 	updatedPage = true
+	// Complete evidence is pinned to its source input, so a changed page alone
+	// is not re-fetched. Checkpoints written before pinning, or after an
+	// incomplete refresh, still re-fetch; exercise the replacement bookkeeping
+	// through that path.
+	var payload map[string]any
+	if err := yaml.Unmarshal([]byte(first.Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, pinned := payload["pinnedinput"]; !pinned {
+		t.Fatal("complete initial evidence was not pinned")
+	}
+	delete(payload, "pinnedinput")
+	unpinned, err := yaml.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Payload = string(unpinned)
+	if err := db.PutProcessingCheckpoint(*first); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.processItem(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ This file records user-visible changes. No tagged release is implied by an entry
 
 ## Unreleased
 
+- Keep processing checkpoints when a built-in source confidence default is added or changed. The processing policy embedded the whole default table, so adding a source discarded every pending candidate and re-paid their grounding, repair and recheck calls.
 - Pin fetched articles, vendor advisories and social context to the source input they were fetched for. Pending candidates and editorial holds no longer re-fetch changing pages every poll, which discarded paid candidates, reset grounding budgets and rebuilt held briefs repeatedly.
 - Retain recent critical disclosures rejected by the quality gate behind a durable, doubling deadline instead of re-scoring them on every intake cycle.
 - Report transient upstream outages (5xx, 408, 429, timeouts) as unhealthy only once they persist for six hours or three poll intervals; blocks, certificate failures and scraper errors remain immediate.

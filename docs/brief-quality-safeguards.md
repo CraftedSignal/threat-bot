@@ -95,7 +95,11 @@ existing coverage but do not create new low-value briefs.
 
 Validated candidates, extraction provenance and the canonical rebuild target
 survive restart. Model IDs, prompts, schemas, quality configuration and policy
-versions invalidate incompatible work. Fetched articles, vendor advisories and
+versions invalidate incompatible work. Built-in source confidence defaults are
+not part of that policy: adding a source or retuning its default applies to new
+items without discarding pending candidates. Configured confidence overrides,
+signal thresholds and the quality threshold still re-evaluate pending work.
+Fetched articles, vendor advisories and
 social context are pinned to the source input they were fetched for once a
 refresh completes: retries and editorial holds reuse that evidence instead of
 re-fetching pages whose chrome, counters or availability change between polls.

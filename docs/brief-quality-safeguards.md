@@ -116,10 +116,14 @@ Grounding attempts, including provider errors, consume a persistent bounded
 budget. The default is five passes with 15 minutes between failed passes. Retry
 resumes the candidate and known failed verdict rather than repeating assembly.
 Successful processing clears the live counter while retaining 90 days of history.
-Conflicting corrections are held with both the canonical draft reference and
-candidate evidence; repeating an unchanged editorial hold makes no model calls.
-A richer source rebuilds a thin brief through full assembly and grounding before
-updating its canonical narrative.
+A revision of a source that already backs a canonical brief never replaces its
+narrative automatically. A revision that keeps the title and text the brief
+indexed from that source, such as an NVD status or reference update, completes
+without work. Any other revision is held for editorial review with its evidence
+and the canonical draft reference before any model call; repeating an unchanged
+editorial hold makes no model calls. A richer source from elsewhere still
+rebuilds a thin brief through full assembly and grounding before updating its
+canonical narrative.
 
 A completed negative merge-claims verdict also creates an editorial hold, retaining
 the selected extraction and target identity without marking the source seen or

@@ -108,6 +108,9 @@ func (p *Pipeline) batchItemReady(ctx context.Context, item scraper.RawItem) (re
 		}
 		return true, false, state.Extraction
 	}
+	if _, ok := p.sourceRevisionTarget(item); ok {
+		return true, true, nil
+	}
 	item, _ = p.refreshSourceEvidence(ctx, item)
 	if ctx.Err() != nil {
 		return false, false, nil
@@ -287,6 +290,11 @@ func (p *Pipeline) planPrefetch(ctx context.Context, items []scraper.RawItem) ba
 			continue
 		}
 		if checkpoint != nil {
+			continue
+		}
+		// Revisions of an existing brief's source complete or are held
+		// without model work.
+		if _, ok := p.sourceRevisionTarget(*item); ok {
 			continue
 		}
 		refreshed, _ := p.refreshSourceEvidence(ctx, *item)

@@ -13,7 +13,9 @@ import (
 
 // A semantically incomplete draft needs a complete grounded narrative, rather
 // than another union of identifiers. Changed evidence from its original source
-// also needs a complete candidate so corrections cannot silently retain prose.
+// is never unioned either: routePreExtraction holds it for editorial review
+// before any model work, because no rebuilt narrative may replace the canonical
+// one automatically (see sourceRevisionHoldReason).
 func (p *Pipeline) draftRebuildTarget(item scraper.RawItem, decision DedupDecision, entries []storage.ContentIndexEntry) string {
 	if decision != DedupMerge && decision != DedupUpdate {
 		return ""

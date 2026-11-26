@@ -30,8 +30,8 @@ type generatedBrief struct {
 	ID          string `json:"id" desc:"brief-YYYY-MM-DD-short-slug"`
 	Slug        string `json:"slug" desc:"YYYY-MM-short-slug"`
 	Title       string `json:"title" desc:"Concise English title"`
-	Summary     string `json:"summary" desc:"One detailed sentence summarizing the threat, actor, technique and impact"`
-	Severity    string `json:"severity" enum:"critical,high,medium,low,informational"`
+	Summary     string `json:"summary" desc:"One sentence on what the source establishes; name an actor, technique or impact only when the source states it"`
+	Severity    string `json:"severity" enum:"critical,high,medium,low,informational" desc:"The source's own rating or CVSS band when it states one; never higher"`
 	ThreatActor string `json:"threat_actor,omitempty" desc:"Single canonical actor name; omit when unknown or disputed"`
 	Content     string `json:"content" desc:"Markdown body with Overview, Attack Chain, Impact and Recommendation sections as the prompt describes"`
 
@@ -44,7 +44,7 @@ type generatedBrief struct {
 
 	Rules            []generatedRule            `json:"rules,omitempty"`
 	IOCs             []generatedIOC             `json:"iocs,omitempty"`
-	TTPs             []generatedTTP             `json:"ttps,omitempty"`
+	TTPs             []generatedTTP             `json:"ttps,omitempty" desc:"Only techniques for attacker behavior the source describes, with the tactic matching the stated effect; omit when it describes none"`
 	SourceAssessment *generatedSourceAssessment `json:"source_assessment,omitempty"`
 	QAStatus         *generatedQAStatus         `json:"qa_status,omitempty"`
 	ActionPlan       *generatedActionPlan       `json:"action_plan,omitempty"`

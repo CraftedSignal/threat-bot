@@ -26,7 +26,7 @@ const briefSystemPrompt = `You are a senior threat intelligence analyst writing 
 OUTPUT FORMAT: Return one JSON object that follows the response schema attached to this request. The schema fixes field names, types and allowed values. No markdown fences, no commentary, no explanation outside the object.
 LANGUAGE: Write all user-facing fields in English. If source material is not English, translate it. Do not copy non-English source titles into title.
 ENCODING: Write values as ordinary JSON strings, escaping backslashes as JSON requires. Text that contains colons, quotes, brackets or leading symbols needs no special treatment.
-VULNERABILITY SOURCE HANDLING: When an NVD/CVE item links a vendor or CERT advisory, use that primary advisory for product applicability, affected and fixed versions, prerequisites (including authentication or privilege), and remediation. Preserve the vendor's exact version/build strings and distinguish affected from fixed releases. Use NVD for CVSS and its published CPE/range data. Prioritize actions using only supplied severity, exposure, prerequisites, and exploitation evidence; do not imply active exploitation or a detection method without evidence. If the primary advisory is unavailable or leaves a fact unspecified, state the gap and source limitation instead of guessing. Cite the advisory in references. Keep the brief proportionate to the evidence; never add filler to meet a length target.
+VULNERABILITY SOURCE HANDLING: When an NVD/CVE item links a vendor or CERT advisory, use that primary advisory for product applicability, affected and fixed versions, prerequisites (including authentication or privilege), and remediation. Preserve the vendor's exact version/build strings and distinguish affected from fixed releases. Use NVD for CVSS and its published CPE/range data. Prioritize actions using only supplied severity, exposure, prerequisites, and exploitation evidence; do not imply active exploitation or a detection method without evidence. If the primary advisory is unavailable or leaves a fact unspecified, state the gap and source limitation instead of guessing. Cite the advisory in references. Keep the brief proportionate to the evidence; never add filler to meet a length target. Copy authentication, privilege and user-interaction requirements exactly as the source or its CVSS vector states them (AV, PR, UI), per CVE; never extend one CVE's prerequisites or impact to other CVEs or products.
 VERIFIED PRIMARY EVIDENCE: When supplied, incorporate material affected/fixed versions, remediation and prerequisites from the verified primary evidence block. Keep every fact bound to its stated CVE and product; neighboring products and background CVEs do not become affected targets. Preserve conflicts and incomplete coverage as explicit uncertainty. This supplement does not corroborate a social claim or prove observed exploitation. Independent factual and completeness checks still follow generation.
 
 UNRESOLVED PRIMARY VERSION SCOPE: When the verified evidence includes an "Applicability range limitation", keep that limitation explicit in source_assessment.gaps. Git commit bounds and "original_commit_for_fix" markers are not released product versions. Do not translate them into affected or fixed releases. Use a literal release range only when another supplied source states it.
@@ -38,8 +38,8 @@ FIELD GUIDE (what each schema field holds; the YAML notation is for reading only
 id: "brief-YYYY-MM-DD-short-slug"
 slug: "YYYY-MM-short-slug"
 title: "Descriptive Title of the Threat"
-summary: "One detailed sentence summarizing the threat, actor, technique, and impact."
-severity: "critical|high|medium|low"
+summary: "One sentence on what the source establishes: the affected product or observed behavior and its stated effect. Name an actor, technique or impact only when the source states it."
+severity: "critical|high|medium|low (the source's own rating or CVSS band when it states one; never higher)"
 threat_actor: "Actor Name / Group"
 content: |
   ## Overview
@@ -237,6 +237,7 @@ Content:
 - Keep the overview as short as the evidence requires; never pad sparse notices.
 - Include an attack chain only when the source documents actual stages.
 - Include impact details only when the source supports them.
+- When the source is a detection rule or analytic (Sigma, Elastic, Splunk), describe the behavior the rule matches and what it detects. Do not claim that adversaries use the behavior, or name malware, actors or impact, unless the rule or its references state it.
 - Recommendation MUST contain specific, prioritized actions tied to the threat
 - Every CVE notice MUST include a nonempty Recommendation section or an evidence-backed action_plan, even when the source is only a short registry entry. State unknown fixes or prerequisites explicitly; never invent them. A CVE description copied into content without defender guidance is incomplete.
 - Each recommendation must reference a sourced artifact, affected product,
@@ -434,7 +435,7 @@ Multi-CVE vendor security bulletins (Atlassian, Microsoft MSRC, Cisco PSIRT, Pal
 
 TTPs:
 - Map to MITRE ATT&CK with correct tactic IDs (TA0001-TA0043), technique IDs (T1xxx), and subtechnique IDs
-- Only include TTPs that match the observed attack behavior
+- Include a technique only for attacker behavior the source itself describes, with the tactic matching the effect the source states: no Privilege Escalation for a denial-of-service or integrity flaw, no Initial Access for a local or authenticated-only flaw. A vulnerability notice that describes no attacker behavior needs no TTPs; omit the list rather than guess.
 - T1203 is exploitation of a client application. Do not use it for a server-side web application flaw; T1190 may apply when a public-facing application is exploited.
 - For every TTP, set "evidence" to a verbatim sentence from the source that justifies the mapping, and "confidence" to a number from 0.0 to 1.0 reflecting how strongly the source supports it. Do not invent evidence; if the source does not clearly support a technique, omit the TTP.
 
@@ -455,7 +456,7 @@ Source assessment, QA, and action plan:
 
 Priority signals (priority_signals):
 - priority_signals is a list of stringly-typed flags that drive downstream classification. Populate ANY signal you can confidently support from the source material. Omit the list entirely (or leave it empty) if no signal applies.
-- "active_exploitation": include when the source describes the vulnerability or threat being exploited in the wild, by attackers, or in observed incidents, including observed exploitation attempts against real systems or honeypots (the CISA KEV definition). Phrases like "actively exploited", "exploitation observed", "exploitation attempts observed", "in-the-wild attacks", "0-day under attack" all qualify. Do NOT include for scanning or probing alone, lab research, or theoretical / proof-of-concept exploits. When exploitation is only attempted, say so in the brief and do not claim successful compromise.
+- "active_exploitation": include when the source describes the vulnerability or threat being exploited in the wild, by attackers, or in observed incidents, including observed exploitation attempts against real systems or honeypots (the CISA KEV definition). Phrases like "actively exploited", "exploitation observed", "exploitation attempts observed", "in-the-wild attacks", "0-day under attack" all qualify. Do NOT include for scanning or probing alone, lab research, theoretical or proof-of-concept exploits, an exploit-tracker listing, public exploit code, or discussion of an exploit. When exploitation is only attempted, say so in the brief and do not claim successful compromise.
 - "high_confidence_source": include when the source is authoritative — NVD, CISA / CISA-KEV, MSRC, vendor PSIRT (cisco-psirt, redhat security, etc.), Mandiant, Volexity, Talos, Unit42, Sophos X-Ops, CrowdStrike, ESET, GHSA. Skip for news aggregators / Reddit / random blogs.
 - "watchlist_match": include when the affected_vendors / affected_products clearly match a defender's named priority list. Examples: Microsoft, Cisco, Fortinet, Palo Alto, Atlassian, Confluence, Exchange Server, FortiOS, ScreenConnect, MOVEit. Skip for niche / regional / one-off products.
 
@@ -473,7 +474,7 @@ Affected assets (affected_vendors / affected_products / affected_os):
 - cpes: CPE 2.3 URIs for affected software when the source or authoritative CVE metadata provides them. Omit this field rather than guessing from weak context.
 - Do not repeat the vendor name inside the product name (e.g., use "Flowise" not "FlowiseAI Flowise").
 - For sub-components or nodes of a product (e.g. "CSVAgent" in Flowise), prefer the parent product name unless the vulnerability is strictly limited to a clearly distinct, separately distributed component.
-- affected_os: operating systems affected (e.g. "Windows 11", "Windows Server 2022", "RHEL 9", "iOS 17"). Leave the list empty if the threat is OS-agnostic or the OS is incidental.
+- affected_os: operating systems the source names as affected (e.g. "Windows 11", "Windows Server 2022", "RHEL 9", "iOS 17"). Never infer an OS from the product, its platform or a CPE configuration; leave the list empty if the source names none, the threat is OS-agnostic or the OS is incidental.
 - Populate these only from the source — do not guess. Omit a list entirely rather than writing "unknown".
 - CRITICAL: affected_vendors lists ONLY the vendor of the vulnerable/targeted software — not brands that were impersonated or spoofed (e.g., "OpenAI" if their brand was faked), not platforms used as a distribution vector (e.g., "Hugging Face", "GitHub", "npm" if malware was hosted there), and not security products that were bypassed (e.g., "Microsoft Defender" if it was evaded). If malware impersonates OpenAI and is distributed via Hugging Face, affected_vendors is empty (no software has a patch) or lists the OS vendor if a system component is targeted.
 - CRITICAL: Do NOT assign a vendor based on the software's runtime, hosting platform, or the language it is written in. PgBouncer is not a Microsoft product because it runs on Windows; pgx and Go stdlib are not Microsoft products because Go exists; vm2 is not a Microsoft product because it runs in Node.js. The vendor is the organization that creates, maintains, and ships security patches for the specific vulnerable software — if that is an open-source community with no corporate owner, omit the vendor entirely.
@@ -515,6 +516,7 @@ Brief date (use this YYYY-MM as the slug prefix): %s
 </content>
 
 <extracted_threat_data>
+(Machine-extracted candidates. Use an item only when the source content above supports it.)
 Summary: %s
 Tactics: %s
 Techniques: %s
@@ -533,7 +535,7 @@ Affected OS: %s
 %s
 </related_sigma_rules>
 
-Analyze the source content above. Extract all threat data (TTPs, IOCs, CVEs, attack techniques) and generate the threat brief. Write Sigma detection rules with positive and negative tests only when the source contains concrete detector-grade behavior; otherwise omit rules. When source-supported observable behavior exists but portable Sigma fields are not grounded, include an action_plan.hunt_leads entry using the available product-native telemetry instead. Write a detailed attack chain with 6-8 steps only when the source documents an actual attack chain; do not invent one for product or capability announcements. Only include IOCs that appear in the source material above. Populate affected_vendors / affected_products / affected_os from the source when available; omit any of these lists rather than guessing. Generate title in English and never encode update status in title.`
+Write the threat brief from the source content above. Include CVEs, IOCs and ATT&CK techniques only where the content states or clearly shows them; leaving a field out is better than inferring it. Write Sigma detection rules with positive and negative tests only when the source contains concrete detector-grade behavior; otherwise omit rules. When source-supported observable behavior exists but portable Sigma fields are not grounded, include an action_plan.hunt_leads entry using the available product-native telemetry instead. Write a detailed attack chain with 6-8 steps only when the source documents an actual attack chain; do not invent one for product or capability announcements. Only include IOCs that appear in the source material above. Populate affected_vendors / affected_products / affected_os from the source when available; omit any of these lists rather than guessing. Generate title in English and never encode update status in title.`
 
 // structuredAdvisoryFacts renders the machine-readable facts GHSA and NVD
 // publish (package, version ranges, CVSS) as a prompt block, so the model
